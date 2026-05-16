@@ -16,11 +16,16 @@ Current implemented pieces:
   - `hermes mempalace-dreaming setup-plan`
 - Provides a dry-run setup planner:
   - `build_setup_plan(...)`
+- Ships a pure, dependency-free dreaming engine MVP:
+  - `mempalace_dreaming/engine.py` (mine → score → filter → dedupe → remember);
+  - testable without the Hermes runtime; `search_fn`/`remember_fn` are injected;
+  - rejects temporary/progress content and secrets, keeps durable facts.
 - Includes tests for:
   - plugin registration;
   - skill contract;
   - setup plan contents;
-  - CLI JSON output.
+  - CLI JSON output;
+  - dreaming engine behavior.
 
 The setup command currently prints a JSON plan. It intentionally does **not** change `~/.hermes/config.yaml`, create cron jobs, install MemPalace, or write memories.
 
