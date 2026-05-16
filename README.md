@@ -48,6 +48,13 @@ Current implemented pieces:
     self-contained prompt, bundled skill attached, `--deliver local` so it
     never broadcasts to chats; without `--create-cron` scheduling stays
     report-only;
+  - cron scheduling is **timezone-aware**: `--time` is a wall-clock time
+    interpreted in `--timezone` (an IANA name, e.g. `America/Sao_Paulo`) and
+    converted to a UTC cron, because the scheduler runs cron in UTC. The
+    default timezone is **UTC** — not "local time"; pass `--timezone`
+    explicitly for local-time scheduling. Plan output shows both the
+    requested time/timezone and the resulting UTC cron; an unknown timezone
+    becomes a JSON warning, never a traceback;
   - post-apply verification is **explicit and opt-in**
     (`--apply --verify-after-apply`): a read-only runtime check whose report
     is embedded in the JSON; it is skipped if apply failed early;

@@ -11,10 +11,68 @@ import dataclasses
 import json
 import re
 import subprocess
+from datetime import datetime, timezone as _utc_tz
 from pathlib import Path
 from typing import Any, Callable, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 VerifyRunFn = Callable[[Sequence[str]], dict]
+
+#: Honest, deterministic default. The scheduler interprets cron in UTC, so
+#: when no ``--timezone`` is given the requested time is treated as UTC --
+#: never silently as "local time".
+DEFAULT_TIMEZONE = "UTC"
+
+#: Fixed reference date used to resolve a timezone's UTC offset. A daily cron
+#: fires at one fixed UTC instant; for zones that observe DST the local run
+#: time shifts by the DST delta during the opposite part of the year. This
+#: keeps conversion deterministic (independent of "today") and the caveat is
+#: documented in the plan output and the READMEs.
+_CRON_REFERENCE_DATE = (2025, 1, 15)
+
+
+def _format_utc_offset(offset) -> str:
+    """Render a ``timedelta`` UTC offset as ``+HH:MM`` / ``-HH:MM``."""
+    total = int(offset.total_seconds()) if offset is not None else 0
+    sign = "-" if total < 0 else "+"
+    total = abs(total)
+    return f"{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
+
+
+def convert_to_utc_cron(
+    time: str, timezone: str = DEFAULT_TIMEZONE
+) -> dict[str, Any]:
+    """Convert a wall-clock ``"HH:MM"`` in ``timezone`` to a UTC daily cron.
+
+    Returns the requested time/timezone alongside the resulting UTC time and
+    the daily cron expression ``"MM HH * * *"`` (UTC), plus the UTC offset
+    used and a DST caveat. Raises :class:`zoneinfo.ZoneInfoNotFoundError` for
+    an unknown timezone and ``ValueError`` for an out-of-range ``HH:MM`` (the
+    latter mirrors the pre-existing validation behavior).
+    """
+    hour_str, _, minute_str = time.partition(":")
+    hour = int(hour_str)
+    minute = int(minute_str)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"time out of range: {time!r}")
+
+    tz = ZoneInfo(timezone)  # ZoneInfoNotFoundError on an unknown zone
+    year, month, day = _CRON_REFERENCE_DATE
+    local_dt = datetime(year, month, day, hour, minute, tzinfo=tz)
+    utc_dt = local_dt.astimezone(_utc_tz.utc)
+
+    return {
+        "requested_time": time,
+        "timezone": timezone,
+        "utc_time": f"{utc_dt.hour:02d}:{utc_dt.minute:02d}",
+        "cron_utc": f"{utc_dt.minute:02d} {utc_dt.hour:02d} * * *",
+        "utc_offset": _format_utc_offset(local_dt.utcoffset()),
+        "dst_caveat": (
+            "Cron fires at a fixed UTC instant. For zones that observe DST "
+            "the wall-clock run time shifts by the DST delta during the "
+            "opposite part of the year."
+        ),
+    }
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 SKILL_PATH = PLUGIN_DIR / "skills" / "mempalace-dreaming" / "SKILL.md"
@@ -23,16 +81,22 @@ PLUGIN_VERSION = "1.0.0"
 PLUGIN_STATUS = "production-ready bootstrap v1.0"
 
 
-def build_schedule_plan(time: str = "05:30") -> dict[str, Any]:
+def build_schedule_plan(
+    time: str = "05:30", timezone: str = DEFAULT_TIMEZONE
+) -> dict[str, Any]:
     """Return a report-only daily dreaming schedule plan.
 
     This describes *what* a conservative daily dreaming cron would look like.
-    It is purely informational: nothing here creates a cron job. Schedule it
-    yourself with your Hermes cron tooling if you want automation.
+    It is purely informational: nothing here creates a cron job. The plan
+    shows both the requested wall-clock ``time``/``timezone`` and the
+    resulting UTC cron expression (the scheduler runs cron in UTC). An
+    unknown timezone becomes a ``warnings`` entry instead of a traceback;
+    no cron is computed in that case.
     """
-    return {
+    plan: dict[str, Any] = {
         "name": "MemPalace Dreaming",
         "time": time,
+        "timezone": timezone,
         "prompt_profile": "daily-conservative",
         "skill": "plugin:mempalace-dreaming",
         "report_only": True,
@@ -40,7 +104,20 @@ def build_schedule_plan(time: str = "05:30") -> dict[str, Any]:
             "Report-only: no cron job is created. Schedule this manually "
             "via your Hermes cron tooling if you want daily dreaming."
         ),
+        "warnings": [],
     }
+    try:
+        conv = convert_to_utc_cron(time, timezone)
+    except ZoneInfoNotFoundError as exc:
+        plan["warnings"].append(
+            f"unknown timezone {timezone!r} ({exc}); no UTC cron computed"
+        )
+        return plan
+    plan["utc_time"] = conv["utc_time"]
+    plan["cron_utc"] = conv["cron_utc"]
+    plan["utc_offset"] = conv["utc_offset"]
+    plan["dst_caveat"] = conv["dst_caveat"]
+    return plan
 
 
 def _module_importable(module_name: str) -> bool:
@@ -88,7 +165,7 @@ def _build_status() -> dict[str, Any]:
     }
 
 
-def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30") -> dict[str, Any]:
+def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE) -> dict[str, Any]:
     """Return an idempotent setup plan without applying it.
 
     The real installer can consume this structure to print a diff, create
@@ -120,12 +197,27 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
         ],
     }
     if schedule_dreaming:
-        plan["schedule"] = {
+        schedule: dict[str, Any] = {
             "name": "MemPalace Dreaming",
             "time": time,
+            "timezone": timezone,
             "prompt_profile": "daily-conservative",
             "skill": "plugin:mempalace-dreaming",
         }
+        try:
+            conv = convert_to_utc_cron(time, timezone)
+        except ZoneInfoNotFoundError as exc:
+            # No misleading cron is emitted; the apply layer surfaces this
+            # as a non-created cron with an error instead of crashing.
+            schedule["timezone_error"] = (
+                f"unknown timezone {timezone!r} ({exc}); no UTC cron computed"
+            )
+        else:
+            schedule["utc_time"] = conv["utc_time"]
+            schedule["cron_utc"] = conv["cron_utc"]
+            schedule["utc_offset"] = conv["utc_offset"]
+            schedule["dst_caveat"] = conv["dst_caveat"]
+        plan["schedule"] = schedule
     return plan
 
 
@@ -332,7 +424,8 @@ def _setup_cli_parser(parser) -> None:
     plan = sub.add_parser("setup-plan", help="Print a safe MemPalace Dreaming setup plan")
     plan.add_argument("--hermes-home", default="~/.hermes", help="Hermes home directory")
     plan.add_argument("--schedule-dreaming", action="store_true", help="Include optional dreaming cron plan")
-    plan.add_argument("--time", default="05:30", help="Local time for optional dreaming cron")
+    plan.add_argument("--time", default="05:30", help="Wall-clock time (HH:MM) for the optional dreaming cron, interpreted in --timezone")
+    plan.add_argument("--timezone", default=DEFAULT_TIMEZONE, help=f"IANA timezone for --time (default: {DEFAULT_TIMEZONE}; the cron is converted to UTC)")
     plan.set_defaults(func=_handle_cli)
 
     setup = sub.add_parser(
@@ -341,7 +434,8 @@ def _setup_cli_parser(parser) -> None:
     )
     setup.add_argument("--hermes-home", default="~/.hermes", help="Hermes home directory")
     setup.add_argument("--schedule-dreaming", action="store_true", help="Include optional dreaming cron plan (report-only)")
-    setup.add_argument("--time", default="05:30", help="Local time for optional dreaming cron")
+    setup.add_argument("--time", default="05:30", help="Wall-clock time (HH:MM) for the optional dreaming cron, interpreted in --timezone")
+    setup.add_argument("--timezone", default=DEFAULT_TIMEZONE, help=f"IANA timezone for --time (default: {DEFAULT_TIMEZONE}; the cron is converted to UTC)")
     setup.add_argument(
         "--apply",
         action="store_true",
@@ -386,7 +480,10 @@ def _setup_cli_parser(parser) -> None:
         help="Print a report-only daily dreaming schedule plan (no cron)",
     )
     schedule_plan.add_argument(
-        "--time", default="05:30", help="Local time for the planned dreaming run"
+        "--time", default="05:30", help="Wall-clock time (HH:MM) for the planned dreaming run, interpreted in --timezone"
+    )
+    schedule_plan.add_argument(
+        "--timezone", default=DEFAULT_TIMEZONE, help=f"IANA timezone for --time (default: {DEFAULT_TIMEZONE}; the cron is converted to UTC)"
     )
     schedule_plan.set_defaults(func=_handle_cli)
 
@@ -480,6 +577,7 @@ def _apply_setup_from_args(
         hermes_home=hermes_home,
         schedule_dreaming=getattr(args, "schedule_dreaming", False),
         time=getattr(args, "time", "05:30"),
+        timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
     )
     if verify_fn is None:
         def verify_fn() -> dict:
@@ -574,7 +672,10 @@ def _handle_cli(args) -> None:
         print(json.dumps(verification, indent=2, ensure_ascii=False))
         return
     if cmd == "schedule-plan":
-        plan = build_schedule_plan(time=getattr(args, "time", "05:30"))
+        plan = build_schedule_plan(
+            time=getattr(args, "time", "05:30"),
+            timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
+        )
         print(json.dumps(plan, indent=2, ensure_ascii=False))
         return
     if cmd == "lean-check":
@@ -594,6 +695,7 @@ def _handle_cli(args) -> None:
             hermes_home=getattr(args, "hermes_home", "~/.hermes"),
             schedule_dreaming=getattr(args, "schedule_dreaming", False),
             time=getattr(args, "time", "05:30"),
+            timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
         )
         print(json.dumps(plan, indent=2, ensure_ascii=False))
 

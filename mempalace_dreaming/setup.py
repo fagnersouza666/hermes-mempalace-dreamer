@@ -117,7 +117,12 @@ def build_cron_create_argv(
     positional is the conservative, self-contained
     :data:`CONSERVATIVE_DREAM_PROMPT`. The bundled skill is always attached.
     """
-    cron_expr = _cron_expr_from_time(schedule["time"])
+    # Prefer the timezone-converted UTC cron from the plan; fall back to a
+    # direct HH:MM->cron only for legacy callers without a ``cron_utc``
+    # (treated as UTC, which is the honest default).
+    cron_expr = schedule.get("cron_utc") or _cron_expr_from_time(
+        schedule["time"]
+    )
     skill = schedule.get("skill", "plugin:mempalace-dreaming")
     return [
         "hermes",
@@ -311,6 +316,18 @@ def _maybe_create_cron(
             "created": False,
             "argv": None,
             "error": "no schedule_fn injected; cannot create cron",
+        }
+    if not schedule_planned.get("cron_utc"):
+        # Timezone conversion failed at plan time (e.g. unknown timezone):
+        # never schedule a misleading cron; report the captured reason.
+        reason = schedule_planned.get(
+            "timezone_error", "no UTC cron in schedule; not creating cron"
+        )
+        return {
+            "requested": True,
+            "created": False,
+            "argv": None,
+            "error": f"cron not created: {reason}",
         }
     argv = build_cron_create_argv(schedule_planned)
     try:

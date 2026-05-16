@@ -42,11 +42,14 @@ This is the live counterpart to `status`, which stays purely local/static.
 ### `setup-plan` — report-only
 
 ```bash
-hermes mempalace-dreaming setup-plan --hermes-home ~/.hermes --schedule-dreaming --time 05:30
+hermes mempalace-dreaming setup-plan --hermes-home ~/.hermes --schedule-dreaming --time 05:30 --timezone America/Sao_Paulo
 ```
 
 Prints the setup plan (directories, `hermes config set ...` commands,
-optional schedule). Never applies anything.
+optional schedule). Never applies anything. With `--schedule-dreaming` the
+`schedule` block carries the requested `time`/`timezone` **and** the
+UTC-converted `cron_utc` (see
+[Timezone-aware scheduling](#timezone-aware-scheduling)).
 
 ### `setup` — dry-run by default, opt-in apply
 
@@ -68,9 +71,12 @@ included a schedule) creates the daily dreaming cron through an injected
 the conservative prompt as **positional** arguments (no `--schedule` /
 `--prompt` flags). The job name is deterministic
 (`mempalace-dreaming-daily`) and `--deliver` is `local` so a schedule never
-broadcasts to chats. The result is reported under `cron`
-(`created`/`argv`/`error`); a cron failure is captured, not raised. Without
-`--create-cron`, scheduling stays report-only.
+broadcasts to chats. The cron expression is the **UTC** conversion of the
+requested `--time`/`--timezone` (see
+[Timezone-aware scheduling](#timezone-aware-scheduling)). The result is
+reported under `cron` (`created`/`argv`/`error`); a cron failure — including
+an unknown timezone — is captured, not raised. Without `--create-cron`,
+scheduling stays report-only.
 
 `--verify-after-apply` (only with `--apply`) runs the read-only runtime
 check after a clean apply and embeds it under `verification`. It is skipped
@@ -83,12 +89,39 @@ package, writes to Obsidian, or writes memory.
 ### `schedule-plan` — report-only
 
 ```bash
-hermes mempalace-dreaming schedule-plan --time 05:30
+hermes mempalace-dreaming schedule-plan --time 05:30 --timezone America/Sao_Paulo
 ```
 
 Prints only a JSON schedule plan describing what a conservative daily
 dreaming cron would look like. **No cron job is created.** Schedule it
-yourself with your Hermes cron tooling if you want automation.
+yourself with your Hermes cron tooling if you want automation. The plan
+shows the requested `time`/`timezone` **and** the resulting `utc_time` /
+`cron_utc` (see [Timezone-aware scheduling](#timezone-aware-scheduling)).
+
+### Timezone-aware scheduling
+
+The Hermes scheduler interprets cron expressions in **UTC**. To avoid lying
+about "local time", scheduling is timezone-aware:
+
+- `--time HH:MM` is a wall-clock time interpreted in `--timezone`.
+- `--timezone` takes an IANA name (e.g. `America/Sao_Paulo`, `UTC`). It
+  defaults to **`UTC`** — a deterministic, honest default. The time is
+  **not** silently treated as the host's local time; pass `--timezone`
+  explicitly for local-time scheduling.
+- The requested time is converted to UTC and emitted as `cron_utc`
+  (`"MM HH * * *"`). `schedule-plan` / `setup-plan` show both the requested
+  `time`/`timezone` and the resulting `utc_time` / `cron_utc` / `utc_offset`,
+  and `setup --apply --create-cron` creates the cron using that UTC
+  expression.
+- Example: `--time 05:30 --timezone America/Sao_Paulo` (UTC−3) →
+  `utc_time: "08:30"`, `cron_utc: "30 08 * * *"`.
+- An unknown timezone is reported as a JSON `warnings` entry (and, on apply,
+  as a non-created `cron` with an error) — never a traceback.
+- DST caveat: a daily cron fires at one fixed UTC instant. For zones that
+  observe daylight saving time, the wall-clock run time shifts by the DST
+  delta during the part of the year with the other offset. The offset is
+  resolved from a fixed reference date so conversion stays deterministic;
+  the plan output includes a `dst_caveat` note.
 
 ### `lean-check` — report-only
 
@@ -128,7 +161,9 @@ are dependency-injected (`search_fn` / `remember_fn`).
 ## Safety model
 
 - No config mutation without the explicit `setup --apply` flag.
-- No cron creation without explicit `setup --apply --create-cron`.
+- No cron creation without explicit `setup --apply --create-cron`; the
+  created cron uses the UTC conversion of `--time`/`--timezone` (default
+  timezone is UTC, never silently "local time").
 - No post-apply verification without explicit `--verify-after-apply`;
   skipped if apply failed early.
 - No Obsidian writes.
