@@ -40,9 +40,27 @@ Partes já implementadas:
 - Fornece uma camada de aplicação explícita:
   - `mempalace_dreaming/setup.py` (`build_config_commands`, `apply_setup_plan`);
   - criação de diretórios e `hermes config set ...` só ocorrem com `--apply`;
-  - efeitos colaterais são injetados (`mkdir_fn` / `run_fn`) e testados unitariamente;
-  - comandos de config são listas argv, executadas via `subprocess` sem shell;
-  - o agendamento permanece planejado/somente relatório — **nenhum cron real é criado ainda**;
+  - efeitos colaterais são injetados (`mkdir_fn` / `run_fn` /
+    `schedule_fn` / `verify_fn`) e testados unitariamente/integração;
+  - comandos de config e de cron são listas argv, executadas via
+    `subprocess` sem shell;
+  - a criação de cron é **explícita e opcional** (`--apply --create-cron`):
+    argv determinístico de `hermes cron create`, nome de job fixo, prompt
+    conservador autocontido, skill empacotada anexada, `--deliver local`
+    para nunca transmitir a chats; sem `--create-cron` o agendamento
+    permanece somente relatório;
+  - o agendamento é **ciente de timezone**: `--time` é um horário de parede
+    interpretado em `--timezone` (nome IANA, ex.: `America/Sao_Paulo`) e
+    convertido para um cron em UTC, pois o agendador roda cron em UTC. O
+    timezone padrão é **UTC** — não "horário local"; passe `--timezone`
+    explicitamente para agendar em horário local. A saída mostra o horário e
+    timezone solicitados e o cron UTC resultante; timezone inválido vira um
+    aviso JSON, nunca um traceback;
+  - a verificação pós-apply é **explícita e opcional**
+    (`--apply --verify-after-apply`): checagem somente leitura embutida no
+    JSON; é pulada se o apply falhou cedo;
+  - o apply nunca lança exceção: a primeira ação que falha é capturada, para
+    as demais e é reportada na lista `errors` do resultado (também no JSON);
   - notas de rollback são incluídas no resultado.
 - Entrega um MVP de engine de dreaming puro e sem dependências:
   - `mempalace_dreaming/engine.py` (minerar → pontuar → filtrar → deduplicar → memorizar);
@@ -61,9 +79,14 @@ Partes já implementadas:
 
 O `setup-plan` apenas imprime um plano em JSON. O `setup` usa por padrão o
 mesmo JSON dry-run; com a flag explícita `--apply` ele cria os diretórios
-planejados e executa os comandos `hermes config set ...`. Mesmo com `--apply`,
-o setup intencionalmente **não** cria cron jobs, não instala o MemPalace, não
-escreve no Obsidian e não grava nenhuma memória.
+planejados e executa os comandos `hermes config set ...`. Adicionar
+`--create-cron` (somente com `--apply`) cria o cron diário de dreaming via
+`schedule_fn` injetado, usando a expressão cron **em UTC** convertida a
+partir de `--time`/`--timezone`; adicionar `--verify-after-apply` roda a
+checagem somente leitura depois. Se uma ação falha sob `--apply`, o setup
+para na primeira falha e a reporta no campo `errors` do JSON. Mesmo com
+todas as flags, o setup intencionalmente **não** instala o pacote do
+provider MemPalace, não escreve no Obsidian e não grava nenhuma memória.
 
 ## Direção pretendida
 
@@ -106,9 +129,13 @@ python3 -m pytest tests -q
 ## Política de segurança atual
 
 - Sem alteração de configuração sem a flag explícita `setup --apply` (padrão é dry-run).
-- Sem criação automática de cron (o modo apply ainda não cria cron).
+- Sem criação de cron sem as flags explícitas `setup --apply --create-cron`;
+  o cron criado usa a conversão UTC de `--time`/`--timezone` (timezone
+  padrão é UTC, nunca silenciosamente "horário local").
+- Sem verificação pós-apply sem a flag explícita `--verify-after-apply`,
+  e ela é pulada se o apply falhou cedo.
 - Sem escrita no Obsidian.
-- Sem gravação de memória durante o setup.
+- Sem gravação de memória durante o setup ou a verificação.
 - Sem fallback para a memória interna no caso de fatos duráveis normais.
 - Fallback de backend desconhecido é somente para relatório (report-only).
 - Exclusão/compactação de memória deve ser explícita e aprovada pelo usuário.
@@ -116,18 +143,22 @@ python3 -m pytest tests -q
 
 ## Status
 
-**MVP público v0.1 — completo.** Planejamento de setup seguro, apply
-explícito e opcional, `status` somente leitura, `schedule-plan` somente
-relatório e uma engine de dreaming pura estão todos implementados e testados.
-Utilizável como base de design/teste.
+**Bootstrap pronto para produção v1.0.** Planejamento seguro de setup,
+apply explícito e opcional, criação explícita e opcional de cron,
+verificação pós-apply explícita e opcional, `status` / `verify-runtime`
+somente leitura, `schedule-plan` somente relatório e uma engine de dreaming
+pura estão implementados e cobertos por testes unitários + testes de
+integração contra um Hermes Home isolado.
 
-Uma verificação ao vivo e somente leitura, `verify-runtime`, já está
-disponível — ela inspeciona uma instalação Hermes real, mas nunca corrige,
-instala ou agenda nada.
+**Escopo de “pronto para produção”:** esta é uma camada de bootstrap e
+orquestração pronta para produção. Ela pressupõe que um provider MemPalace do
+Hermes **já exista** no ambiente — instalar esse pacote/provider continua
+sendo externo e deliberadamente fora de escopo.
 
-**Ainda não pronto para produção.** Instalação de provider e agendamento
-cron real permanecem como trabalho futuro.
+O agendamento agora é **ciente de timezone**: o cron criado usa a conversão
+UTC de `--time`/`--timezone`. O timezone padrão é **UTC**; para horário local,
+passe `--timezone` explicitamente e confira `cron_utc` na saída JSON.
 
 Veja [`docs/USAGE.md`](docs/USAGE.md) para comandos e modelo de segurança,
-[`CHANGELOG.md`](CHANGELOG.md) para a entrada v0.1.0, e
+[`CHANGELOG.md`](CHANGELOG.md) para a entrada v1.0.0, e
 [`ROADMAP.md`](ROADMAP.md) para o que está e o que não está pronto.
