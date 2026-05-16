@@ -44,6 +44,14 @@ Acceptance criteria:
 
 ## 2. Dreaming engine
 
+**MVP done:** `mempalace_dreaming/engine.py` ships a pure, dependency-free
+pipeline (`mine_candidates` → `score_candidate` → `filter_durable_candidates`
+→ `dedupe_candidates` → `remember_candidates`, plus `run_light_dream`
+returning a `DreamReport`). `search_fn`/`remember_fn` are injected; no Hermes
+tools are imported. Covered by `tests/test_engine.py`.
+
+Remaining engine stages:
+
 Add a pure Python engine module with testable stages:
 
 - `mine_sessions()`
