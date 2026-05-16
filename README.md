@@ -1,5 +1,7 @@
 # Hermes MemPalace Dreamer
 
+[![tests](https://github.com/fagnersouza666/hermes-mempalace-dreamer/actions/workflows/test.yml/badge.svg)](https://github.com/fagnersouza666/hermes-mempalace-dreamer/actions/workflows/test.yml)
+
 MemPalace-first dreaming and memory hygiene bundle for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
 This repository is an early public MVP. It does **not** install or mutate a real Hermes configuration yet. It ships the first safe scaffold for a plugin whose job is to make Hermes memory consolidation use MemPalace as the primary semantic memory layer instead of bloating built-in `MEMORY.md` / `USER.md`.
