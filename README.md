@@ -6,7 +6,14 @@
 
 MemPalace-first dreaming and memory hygiene bundle for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-This repository is an early public MVP. It does **not** install or mutate a real Hermes configuration yet. It ships the first safe scaffold for a plugin whose job is to make Hermes memory consolidation use MemPalace as the primary semantic memory layer instead of bloating built-in `MEMORY.md` / `USER.md`.
+**Public MVP v0.1 is complete.** This is an honest, safe MVP — not a
+production-ready system. It ships a working safe surface (setup planning,
+explicit opt-in apply, read-only status, report-only schedule plan) and a
+pure, dependency-free dreaming engine. It does **not** install MemPalace,
+create cron jobs, write to Obsidian, or write any memory. Production
+readiness (see [`ROADMAP.md`](ROADMAP.md)) remains future work.
+
+Its job is to make Hermes memory consolidation use MemPalace as the primary semantic memory layer instead of bloating built-in `MEMORY.md` / `USER.md`.
 
 ## What it does today
 
@@ -19,6 +26,8 @@ Current implemented pieces:
 - Registers CLI commands:
   - `hermes mempalace-dreaming setup-plan` (always report-only)
   - `hermes mempalace-dreaming setup` (dry-run by default, `--apply` opt-in)
+  - `hermes mempalace-dreaming status` (read-only JSON: version, modules, safety flags)
+  - `hermes mempalace-dreaming schedule-plan` (report-only JSON; never creates cron)
 - Provides a dry-run setup planner:
   - `build_setup_plan(...)`
 - Provides an explicit apply layer:
@@ -33,7 +42,9 @@ Current implemented pieces:
 - Ships a pure, dependency-free dreaming engine MVP:
   - `mempalace_dreaming/engine.py` (mine → score → filter → dedupe → remember);
   - testable without the Hermes runtime; `search_fn`/`remember_fn` are injected;
-  - rejects temporary/progress content and secrets, keeps durable facts.
+  - rejects temporary/progress content and secrets, keeps durable facts;
+  - `render_report(report)` → deterministic markdown summary;
+  - `audit_retrieval_noise(results)` → pure useful/noisy classification (no memory writes).
 - Includes tests for:
   - plugin registration;
   - skill contract;
@@ -99,6 +110,13 @@ python3 -m pytest tests -q
 
 ## Status
 
-MVP scaffold: usable as a design/test base, not production-ready yet.
+**Public MVP v0.1 — complete.** Safe setup planning, explicit opt-in apply,
+read-only `status`, report-only `schedule-plan`, and a pure dreaming engine
+are all implemented and tested. Usable as a design/test base.
 
-See [`ROADMAP.md`](ROADMAP.md) for the next implementation steps.
+**Not production-ready.** Provider installation, real cron scheduling, and
+verification against a live Hermes install remain future work.
+
+See [`docs/USAGE.md`](docs/USAGE.md) for commands and the safety model,
+[`CHANGELOG.md`](CHANGELOG.md) for the v0.1.0 entry, and
+[`ROADMAP.md`](ROADMAP.md) for what is and isn't done.

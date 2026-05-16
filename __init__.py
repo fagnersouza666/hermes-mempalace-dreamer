@@ -15,6 +15,72 @@ from typing import Any
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 SKILL_PATH = PLUGIN_DIR / "skills" / "mempalace-dreaming" / "SKILL.md"
+PLUGIN_NAME = "mempalace-dreaming"
+PLUGIN_VERSION = "0.1.0"
+PLUGIN_STATUS = "public MVP v0.1"
+
+
+def build_schedule_plan(time: str = "05:30") -> dict[str, Any]:
+    """Return a report-only daily dreaming schedule plan.
+
+    This describes *what* a conservative daily dreaming cron would look like.
+    It is purely informational: nothing here creates a cron job. Schedule it
+    yourself with your Hermes cron tooling if you want automation.
+    """
+    return {
+        "name": "MemPalace Dreaming",
+        "time": time,
+        "prompt_profile": "daily-conservative",
+        "skill": "plugin:mempalace-dreaming",
+        "report_only": True,
+        "note": (
+            "Report-only: no cron job is created. Schedule this manually "
+            "via your Hermes cron tooling if you want daily dreaming."
+        ),
+    }
+
+
+def _module_importable(module_name: str) -> bool:
+    """True if ``module_name`` resolves from PLUGIN_DIR, without importing it.
+
+    Uses ``importlib.util.find_spec`` against a path that always works for a
+    GitHub-cloned plugin, so the check is independent of ``sys.path`` and has
+    no import side effects.
+    """
+    import importlib.util
+
+    relative = module_name.replace(".", "/") + ".py"
+    return (PLUGIN_DIR / relative).is_file() and (
+        importlib.util.spec_from_file_location(
+            module_name, PLUGIN_DIR / relative
+        )
+        is not None
+    )
+
+
+def _build_status() -> dict[str, Any]:
+    """Describe plugin/version/status and safety flags. Pure.
+
+    Never calls Hermes memory and never mutates anything; the result depends
+    only on what files are present on disk.
+    """
+    return {
+        "plugin": PLUGIN_NAME,
+        "version": PLUGIN_VERSION,
+        "status": PLUGIN_STATUS,
+        "bundled_skill_exists": SKILL_PATH.is_file(),
+        "engine_module_available": _module_importable(
+            "mempalace_dreaming.engine"
+        ),
+        "setup_module_available": _module_importable(
+            "mempalace_dreaming.setup"
+        ),
+        "safety": {
+            "no_obsidian_writes": True,
+            "no_setup_memory_writes": True,
+            "schedule_report_only": True,
+        },
+    }
 
 
 def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30") -> dict[str, Any]:
@@ -80,6 +146,21 @@ def _setup_cli_parser(parser) -> None:
     )
     setup.set_defaults(func=_handle_cli)
 
+    status = sub.add_parser(
+        "status",
+        help="Print plugin status and safety flags as JSON (read-only)",
+    )
+    status.set_defaults(func=_handle_cli)
+
+    schedule_plan = sub.add_parser(
+        "schedule-plan",
+        help="Print a report-only daily dreaming schedule plan (no cron)",
+    )
+    schedule_plan.add_argument(
+        "--time", default="05:30", help="Local time for the planned dreaming run"
+    )
+    schedule_plan.set_defaults(func=_handle_cli)
+
 
 def _default_mkdir(path: str) -> None:
     Path(path).expanduser().mkdir(parents=True, exist_ok=True)
@@ -142,6 +223,13 @@ def _apply_setup_from_args(args, *, mkdir_fn=_default_mkdir, run_fn=_default_run
 
 def _handle_cli(args) -> None:
     cmd = getattr(args, "mempalace_dreaming_command", None)
+    if cmd == "status":
+        print(json.dumps(_build_status(), indent=2, ensure_ascii=False))
+        return
+    if cmd == "schedule-plan":
+        plan = build_schedule_plan(time=getattr(args, "time", "05:30"))
+        print(json.dumps(plan, indent=2, ensure_ascii=False))
+        return
     if cmd == "setup":
         result = _apply_setup_from_args(args)
         print(json.dumps(dataclasses.asdict(result), indent=2, ensure_ascii=False))

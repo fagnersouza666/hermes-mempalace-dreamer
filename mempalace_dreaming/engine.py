@@ -38,7 +38,7 @@ _SECRET_PATTERNS = (
     re.compile(r"\.env\b", re.IGNORECASE),
     re.compile(r"connection string", re.IGNORECASE),
     re.compile(r"\b[A-Z][A-Z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD)\b"),
-    re.compile(r"\b(?:sk|ghp|xox[baprs])-?[A-Za-z0-9]{4,}", re.IGNORECASE),
+    re.compile(r"\b(?:sk|ghp|xox[baprs])[-_]?[A-Za-z0-9]{4,}", re.IGNORECASE),
     re.compile(r"\b\w+://[^\s:]+:[^\s@]+@"),  # creds embedded in a URL
 )
 
@@ -116,8 +116,87 @@ class DreamReport:
     remembered_texts: list[str] = field(default_factory=list)
 
 
+@dataclass
+class RetrievalAuditReport:
+    """Classification of retrieval results into useful vs noisy.
+
+    Pure data: produced by :func:`audit_retrieval_noise`, which never reads
+    or writes memory.
+    """
+
+    useful: list[str] = field(default_factory=list)
+    noisy: list[str] = field(default_factory=list)
+    total: int = 0
+    useful_count: int = 0
+    noisy_count: int = 0
+
+
 def _matches_any(patterns: Iterable[re.Pattern[str]], text: str) -> bool:
     return any(p.search(text) for p in patterns)
+
+
+def _result_text(result: object) -> str:
+    """Extract the text of a search result (str, mapping, or object)."""
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return result.strip()
+    if isinstance(result, dict):
+        return str(result.get("text", "")).strip()
+    return str(getattr(result, "text", result)).strip()
+
+
+def audit_retrieval_noise(
+    search_results: Iterable[object],
+) -> RetrievalAuditReport:
+    """Classify retrieval results into useful vs noisy. Pure helper.
+
+    A result is *noisy* when its text matches the same temporary/progress or
+    secret-like patterns the dreaming pipeline rejects; otherwise it is
+    *useful*. Empty/blank results are skipped (not counted). This function
+    never writes memory and has no side effects.
+
+    Accepts strings, mappings with a ``text`` key, or objects exposing a
+    ``text`` attribute.
+    """
+    report = RetrievalAuditReport()
+    for result in search_results:
+        text = _result_text(result)
+        if not text:
+            continue
+        report.total += 1
+        if _matches_any(_TEMPORARY_PATTERNS, text) or _matches_any(
+            _SECRET_PATTERNS, text
+        ):
+            report.noisy.append(text)
+        else:
+            report.useful.append(text)
+    report.useful_count = len(report.useful)
+    report.noisy_count = len(report.noisy)
+    return report
+
+
+def render_report(report: DreamReport) -> str:
+    """Render a :class:`DreamReport` as deterministic markdown.
+
+    The output depends only on ``report`` (same input -> identical string),
+    so it is safe to snapshot, diff, or post in a cron report.
+    """
+    lines = [
+        "# MemPalace Dream Report",
+        "",
+        f"- Remembered: {report.remembered}",
+        f"- Duplicates: {report.duplicates}",
+        f"- Rejected: {report.rejected}",
+        "",
+        "## Remembered",
+        "",
+    ]
+    if report.remembered_texts:
+        lines.extend(f"- {text}" for text in report.remembered_texts)
+    else:
+        lines.append("_None_")
+    return "\n".join(lines) + "\n"
 
 
 def mine_candidates(session_entries: Iterable[str]) -> list[CandidateMemory]:
