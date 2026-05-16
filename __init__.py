@@ -19,8 +19,8 @@ VerifyRunFn = Callable[[Sequence[str]], dict]
 PLUGIN_DIR = Path(__file__).resolve().parent
 SKILL_PATH = PLUGIN_DIR / "skills" / "mempalace-dreaming" / "SKILL.md"
 PLUGIN_NAME = "mempalace-dreaming"
-PLUGIN_VERSION = "0.1.0"
-PLUGIN_STATUS = "public MVP v0.1"
+PLUGIN_VERSION = "1.0.0"
+PLUGIN_STATUS = "production-ready bootstrap v1.0"
 
 
 def build_schedule_plan(time: str = "05:30") -> dict[str, Any]:
@@ -82,6 +82,8 @@ def _build_status() -> dict[str, Any]:
             "no_obsidian_writes": True,
             "no_setup_memory_writes": True,
             "schedule_report_only": True,
+            "cron_creation_explicit": True,
+            "verify_after_apply_explicit": True,
         },
     }
 
@@ -345,6 +347,23 @@ def _setup_cli_parser(parser) -> None:
         action="store_true",
         help="Create directories and run 'hermes config set ...' (default is dry-run)",
     )
+    setup.add_argument(
+        "--create-cron",
+        action="store_true",
+        help=(
+            "With --apply, also create the daily dreaming cron via "
+            "'hermes cron create' (deterministic name, deliver=local). "
+            "Without this flag scheduling stays report-only."
+        ),
+    )
+    setup.add_argument(
+        "--verify-after-apply",
+        action="store_true",
+        help=(
+            "With --apply, run a read-only runtime verification afterwards "
+            "and include it in the JSON (skipped if apply failed early)."
+        ),
+    )
     setup.set_defaults(func=_handle_cli)
 
     status = sub.add_parser(
@@ -396,6 +415,16 @@ def _default_run(argv) -> None:
     subprocess.run(list(argv), check=True)
 
 
+def _default_schedule(argv) -> None:
+    """Create a cron job by running an argv list (never a shell string).
+
+    Used as the default ``schedule_fn`` for ``setup --apply --create-cron``.
+    Raises ``CalledProcessError`` on failure, which the apply layer captures
+    into the JSON ``cron`` result instead of crashing.
+    """
+    subprocess.run(list(argv), check=True)
+
+
 def _load_apply_setup_plan():
     """Resolve ``apply_setup_plan`` without depending on ``sys.path``.
 
@@ -426,24 +455,45 @@ def _load_apply_setup_plan():
         return module.apply_setup_plan
 
 
-def _apply_setup_from_args(args, *, mkdir_fn=_default_mkdir, run_fn=_default_run):
+def _apply_setup_from_args(
+    args,
+    *,
+    mkdir_fn=_default_mkdir,
+    run_fn=_default_run,
+    schedule_fn=_default_schedule,
+    verify_fn=None,
+):
     """Build the plan from CLI args and apply (or describe) it.
 
     Factored out of :func:`_handle_cli` so apply mode is unit-testable
-    without running Hermes: inject ``mkdir_fn`` / ``run_fn``.
+    without running Hermes: inject ``mkdir_fn`` / ``run_fn`` /
+    ``schedule_fn`` / ``verify_fn``. Cron creation and post-apply
+    verification only happen when their explicit flags are set *and*
+    ``--apply`` is set; both are dependency-injected (no hidden globals).
+    The default ``verify_fn`` is a read-only closure over
+    :func:`build_runtime_verification` for the chosen ``--hermes-home``.
     """
     apply_setup_plan = _load_apply_setup_plan()
 
+    hermes_home = getattr(args, "hermes_home", "~/.hermes")
     plan = build_setup_plan(
-        hermes_home=getattr(args, "hermes_home", "~/.hermes"),
+        hermes_home=hermes_home,
         schedule_dreaming=getattr(args, "schedule_dreaming", False),
         time=getattr(args, "time", "05:30"),
     )
+    if verify_fn is None:
+        def verify_fn() -> dict:
+            return build_runtime_verification(hermes_home=hermes_home)
+
     return apply_setup_plan(
         plan,
         mkdir_fn=mkdir_fn,
         run_fn=run_fn,
         apply=getattr(args, "apply", False),
+        schedule_fn=schedule_fn,
+        create_cron=getattr(args, "create_cron", False),
+        verify_fn=verify_fn,
+        verify_after_apply=getattr(args, "verify_after_apply", False),
     )
 
 

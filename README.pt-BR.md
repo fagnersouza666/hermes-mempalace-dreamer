@@ -6,13 +6,16 @@
 
 Pacote de "sonho" (dreaming) e higiene de memória, com o MemPalace em primeiro lugar, para o [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-**O MVP público v0.1 está completo.** É um MVP honesto e seguro — **não** é
-um sistema pronto para produção. Ele entrega uma superfície segura funcional
-(planejamento de setup, apply explícito e opcional, `status` somente leitura,
-`schedule-plan` somente relatório) e uma engine de dreaming pura, sem
-dependências. Ele **não** instala o MemPalace, não cria cron, não escreve no
-Obsidian e não grava nenhuma memória. A prontidão para produção (ver
-[`ROADMAP.md`](ROADMAP.md)) permanece como trabalho futuro.
+**Bootstrap pronto para produção v1.0.** É uma camada de bootstrap e
+orquestração honesta e segura para ambientes que **já possuem um provider
+MemPalace do Hermes disponível**. Entrega uma superfície segura funcional
+(planejamento de setup, apply explícito e opcional, criação de cron
+explícita e opcional, verificação pós-apply explícita e opcional, `status`
+e `verify-runtime` somente leitura) e uma engine de dreaming pura, sem
+dependências. Ele **não** instala o pacote do provider MemPalace em si —
+isso permanece externo/pré-existente e específico do ambiente. Nunca escreve
+no Obsidian e nunca grava memória durante setup ou verificação. Todo efeito
+colateral é explícito e injetado por dependência.
 
 Sua função é fazer a consolidação de memória do Hermes usar o MemPalace como camada principal de memória semântica, em vez de inflar os arquivos internos `MEMORY.md` / `USER.md`.
 
@@ -26,7 +29,8 @@ Partes já implementadas:
   - `skills/mempalace-dreaming/SKILL.md`
 - Registra comandos de CLI:
   - `hermes mempalace-dreaming setup-plan` (sempre somente relatório)
-  - `hermes mempalace-dreaming setup` (dry-run por padrão, `--apply` opcional)
+  - `hermes mempalace-dreaming setup` (dry-run por padrão; `--apply`
+    opcional; `--create-cron` e `--verify-after-apply` explícitos e opcionais)
   - `hermes mempalace-dreaming status` (JSON somente leitura: versão, módulos, flags de segurança)
   - `hermes mempalace-dreaming verify-runtime` (verificação ao vivo somente leitura do ambiente; sem efeitos colaterais)
   - `hermes mempalace-dreaming schedule-plan` (JSON somente relatório; nunca cria cron)
