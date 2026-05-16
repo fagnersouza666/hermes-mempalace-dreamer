@@ -31,6 +31,7 @@ class SetupResult:
     config_commands: list[list[str]] = field(default_factory=list)
     schedule_planned: dict[str, Any] | None = None
     rollback_notes: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 def _format_value(value: Any) -> str:
@@ -91,26 +92,57 @@ def apply_setup_plan(
     called; the returned :class:`SetupResult` describes what *would* be done.
 
     With ``apply=True`` each planned directory is created via ``mkdir_fn``
-    and each config command is run via ``run_fn`` as an argv list.
+    and each config command is run via ``run_fn`` as an argv list. Failures
+    are caught: the first failing action records a useful error string,
+    stops all further actions, and the partial :class:`SetupResult` is
+    returned instead of raising. If directory creation fails, no config
+    command runs; if a config command fails, already-completed actions
+    remain recorded and later commands do not run.
 
     Scheduling is always report-only: ``schedule_planned`` echoes
     ``plan["schedule"]`` (or ``None``) and no cron side effect is performed.
     """
-    directories = list(plan.get("directories", []))
-    config_commands = build_config_commands(plan)
+    planned_directories = list(plan.get("directories", []))
+    planned_commands = build_config_commands(plan)
     schedule_planned = plan.get("schedule")
-    rollback_notes = _build_rollback_notes(directories, config_commands)
+    rollback_notes = _build_rollback_notes(planned_directories, planned_commands)
 
-    if apply:
-        for path in directories:
+    if not apply:
+        return SetupResult(
+            applied=False,
+            created_directories=planned_directories,
+            config_commands=planned_commands,
+            schedule_planned=schedule_planned,
+            rollback_notes=rollback_notes,
+            errors=[],
+        )
+
+    created_directories: list[str] = []
+    config_commands: list[list[str]] = []
+    errors: list[str] = []
+
+    for path in planned_directories:
+        try:
             mkdir_fn(path)
-        for argv in config_commands:
-            run_fn(argv)
+        except Exception as exc:  # noqa: BLE001 - report, never crash apply
+            errors.append(f"Failed to create directory {path!r}: {exc}")
+            break
+        created_directories.append(path)
+
+    if not errors:
+        for argv in planned_commands:
+            try:
+                run_fn(argv)
+            except Exception as exc:  # noqa: BLE001 - report, never crash
+                errors.append(f"Failed to run config command {argv!r}: {exc}")
+                break
+            config_commands.append(argv)
 
     return SetupResult(
-        applied=apply,
-        created_directories=directories,
+        applied=True,
+        created_directories=created_directories,
         config_commands=config_commands,
         schedule_planned=schedule_planned,
         rollback_notes=rollback_notes,
+        errors=errors,
     )

@@ -27,7 +27,9 @@ Current implemented pieces:
   - side effects are dependency-injected (`mkdir_fn` / `run_fn`) and unit-tested;
   - config commands are argv lists, run via `subprocess` without a shell;
   - schedule stays planned/report-only — **no real cron is created yet**;
-  - rollback notes are included in the result.
+  - apply never raises: the first failing action is caught, stops further
+    actions, and is reported in the result's `errors` list (also in CLI JSON);
+  - rollback notes are included in the result (printed for every run).
 - Ships a pure, dependency-free dreaming engine MVP:
   - `mempalace_dreaming/engine.py` (mine → score → filter → dedupe → remember);
   - testable without the Hermes runtime; `search_fn`/`remember_fn` are injected;
@@ -41,9 +43,11 @@ Current implemented pieces:
 
 `setup-plan` only prints a JSON plan. `setup` defaults to the same dry-run
 JSON; with the explicit `--apply` flag it creates the planned directories and
-runs `hermes config set ...` commands. Even with `--apply`, setup intentionally
-does **not** create cron jobs, install MemPalace, write to Obsidian, or write
-any memories.
+runs `hermes config set ...` commands. If an action fails under `--apply`,
+setup stops at the first failure and reports it in the JSON `errors` field
+(directory creation failing means no config command runs); rollback notes are
+always printed. Even with `--apply`, setup intentionally does **not** create
+cron jobs, install MemPalace, write to Obsidian, or write any memories.
 
 ## Intended direction
 
