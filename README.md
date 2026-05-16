@@ -1,28 +1,78 @@
 # Hermes MemPalace Dreamer
 
-MemPalace-first dreaming and memory hygiene bundle for Hermes Agent.
+MemPalace-first dreaming and memory hygiene bundle for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-## Goal
+This repository is an early public MVP. It does **not** install or mutate a real Hermes configuration yet. It ships the first safe scaffold for a plugin whose job is to make Hermes memory consolidation use MemPalace as the primary semantic memory layer instead of bloating built-in `MEMORY.md` / `USER.md`.
 
-One installable Hermes plugin that ships:
+## What it does today
 
-- a MemPalace-first dreaming skill;
-- safe setup planning CLI;
-- future installer hooks for a MemPalace provider and optional cron routine.
+Current implemented pieces:
 
-## Install, once published
+- Hermes plugin metadata in `plugin.yaml`.
+- Plugin entrypoint in `__init__.py`.
+- Registers a plugin-provided skill:
+  - `skills/mempalace-dreaming/SKILL.md`
+- Registers a CLI command:
+  - `hermes mempalace-dreaming setup-plan`
+- Provides a dry-run setup planner:
+  - `build_setup_plan(...)`
+- Includes tests for:
+  - plugin registration;
+  - skill contract;
+  - setup plan contents;
+  - CLI JSON output.
 
-```bash
-hermes plugins install OWNER/hermes-mempalace-dreamer --enable
-hermes mempalace-dreaming setup-plan --schedule-dreaming
-```
+The setup command currently prints a JSON plan. It intentionally does **not** change `~/.hermes/config.yaml`, create cron jobs, install MemPalace, or write memories.
 
-Current state: MVP scaffold. The setup command prints a plan; it does not mutate config yet.
+## Intended direction
+
+The final component should become a one-install Hermes plugin for:
+
+- MemPalace-first memory dreaming;
+- memory hygiene / lean-check routines;
+- optional daily dreaming cron;
+- safe setup of `memory.provider: mempalace`;
+- integration with a Hermes MemPalace provider;
+- clean-room adaptation of ideas from existing memory-dreaming projects.
 
 ## Design inputs
 
-- Pluton: MINE/CURATE/COMPRESS/CONTEXT.
-- nexus9888/hermes-memory-skills: Light/Deep/REM and lean-check discipline.
-- Hermes MemPalace provider plugins: native provider, prefetch, diary, KG.
+This project borrows ideas, not code, from:
 
-We do not vendor upstream skills until license/permission is explicit.
+- Pluton: `MINE -> CURATE -> COMPRESS -> CONTEXT` dream pipeline.
+- `nexus9888/hermes-memory-skills`: Light/Deep/REM structure and lean-check discipline.
+- Hermes MemPalace provider plugins: native provider, prefetch, diary, and knowledge graph concepts.
+
+No third-party skill text is vendored here until license and attribution are explicit.
+
+## Install
+
+Once published and supported by your Hermes version:
+
+```bash
+hermes plugins install fagnersouza666/hermes-mempalace-dreamer --enable
+hermes mempalace-dreaming setup-plan --schedule-dreaming
+```
+
+For local development:
+
+```bash
+git clone https://github.com/fagnersouza666/hermes-mempalace-dreamer.git
+cd hermes-mempalace-dreamer
+python3 -m pytest tests -q
+```
+
+## Current safety policy
+
+- No automatic config mutation.
+- No automatic cron creation.
+- No Obsidian writes.
+- No built-in memory fallback for normal durable facts.
+- Unknown backend fallback is report-only.
+- Memory deletion/compaction must be explicit and user-approved.
+
+## Status
+
+MVP scaffold: usable as a design/test base, not production-ready yet.
+
+See [`ROADMAP.md`](ROADMAP.md) for the next implementation steps.
