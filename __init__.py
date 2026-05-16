@@ -534,7 +534,7 @@ _DREAMING_RE = re.compile(
 )
 
 
-_CRON_BLOCK_HEADER_RE = re.compile(r"^\S+\s+\[[^\]]+\]\s*$")
+_CRON_BLOCK_HEADER_RE = re.compile(r"^\s*\S+\s+\[[^\]]+\]\s*$")
 _CRON_BLOCK_NAME_RE = re.compile(r"^\s*name\s*[:=]\s*(.+?)\s*$", re.IGNORECASE)
 _CRON_BLOCK_SCHED_RE = re.compile(r"^\s*schedule\s*[:=]\s*(.+?)\s*$", re.IGNORECASE)
 
