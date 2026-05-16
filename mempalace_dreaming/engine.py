@@ -52,6 +52,48 @@ _DURABLE_PATTERNS = (
 
 _MIN_DURABLE_SCORE = 1.0
 
+# Remembered text must be concise. Anything longer is truncated with an
+# ellipsis so the final string never exceeds this many characters.
+_MAX_REMEMBERED_CHARS = 280
+_ELLIPSIS = "..."
+
+_WHITESPACE_RE = re.compile(r"\s+")
+_BULLET_RE = re.compile(r"^[-*•]\s+")
+# A leading conversational role label, optionally behind a bullet, e.g.
+# "User:", "- Assistant:", "• System:". Requires the trailing colon so we
+# only strip obvious labels, never sentences that merely begin with a role
+# word ("Users prefer tabs").
+_ROLE_LABEL_RE = re.compile(
+    r"^(?:[-*•]\s+)?(?:user|assistant|system|human|ai)\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def normalize_remembered_text(text: str) -> str:
+    """Return a concise, normalized form of ``text`` for durable storage.
+
+    Pure helper:
+
+    * collapse any run of whitespace/newlines to a single space and trim;
+    * strip an obvious leading bullet and/or role label (``User:`` /
+      ``Assistant:`` ...), repeatedly, so ``- User: foo`` becomes ``foo``;
+    * cap the result at ``_MAX_REMEMBERED_CHARS`` characters, appending
+      ``...`` (counted within the cap) when truncation occurs.
+    """
+    collapsed = _WHITESPACE_RE.sub(" ", text).strip()
+
+    while True:
+        stripped = _ROLE_LABEL_RE.sub("", collapsed, count=1)
+        stripped = _BULLET_RE.sub("", stripped, count=1).strip()
+        if stripped == collapsed:
+            break
+        collapsed = stripped
+
+    if len(collapsed) > _MAX_REMEMBERED_CHARS:
+        head = collapsed[: _MAX_REMEMBERED_CHARS - len(_ELLIPSIS)].rstrip()
+        collapsed = head + _ELLIPSIS
+    return collapsed
+
 
 @dataclass
 class CandidateMemory:
@@ -157,16 +199,19 @@ def dedupe_candidates(
 def remember_candidates(
     candidates: Iterable[CandidateMemory],
     remember_fn: RememberFn,
-) -> int:
+) -> list[str]:
     """Persist candidates via the injected ``remember_fn``.
 
-    Returns the number of candidates remembered.
+    Each candidate's text is normalized (see ``normalize_remembered_text``)
+    and passed directly to ``remember_fn``. Returns the list of texts
+    actually handed to ``remember_fn``, in order.
     """
-    count = 0
+    remembered: list[str] = []
     for candidate in candidates:
-        remember_fn(candidate.text)
-        count += 1
-    return count
+        text = normalize_remembered_text(candidate.text)
+        remember_fn(text)
+        remembered.append(text)
+    return remembered
 
 
 def run_light_dream(
@@ -179,16 +224,15 @@ def run_light_dream(
     durable = filter_durable_candidates(candidates)
     rejected = len(candidates) - len(durable)
 
+    # dedupe_candidates fully exhausts search_fn before we reach
+    # remember_candidates, so every search precedes every remember.
     survivors = dedupe_candidates(durable, search_fn)
     duplicates = len(durable) - len(survivors)
 
-    remembered_texts: list[str] = []
-    remembered = remember_candidates(survivors, remembered_texts.append)
-    for text in remembered_texts:
-        remember_fn(text)
+    remembered_texts = remember_candidates(survivors, remember_fn)
 
     return DreamReport(
-        remembered=remembered,
+        remembered=len(remembered_texts),
         duplicates=duplicates,
         rejected=rejected,
         remembered_texts=remembered_texts,

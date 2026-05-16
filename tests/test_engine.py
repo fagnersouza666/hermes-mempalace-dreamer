@@ -12,6 +12,7 @@ from mempalace_dreaming.engine import (
     dedupe_candidates,
     remember_candidates,
     run_light_dream,
+    normalize_remembered_text,
 )
 
 
@@ -29,8 +30,9 @@ def test_durable_candidate_is_mined_scored_and_remembered():
     assert durable, "durable candidate must survive filtering"
 
     remembered_texts = []
-    count = remember_candidates(durable, remembered_texts.append)
-    assert count == len(durable)
+    result = remember_candidates(durable, remembered_texts.append)
+    assert result == remembered_texts, "return value is exactly the texts passed to remember_fn"
+    assert len(result) == len(durable)
     assert remembered_texts and "Python 3.11" in remembered_texts[0]
 
 
@@ -111,3 +113,91 @@ def test_run_light_dream_counts_duplicates():
     assert report.duplicates == 1
     assert report.rejected == 0
     assert remembered_texts == []
+
+
+# --- normalization of remembered text -------------------------------------
+
+
+def test_normalize_collapses_repeated_whitespace_and_newlines():
+    raw = "  prefers   tabs\n\n\tover    spaces  \n  always  "
+    assert normalize_remembered_text(raw) == "prefers tabs over spaces always"
+
+
+def test_normalize_strips_leading_role_labels_and_bullets():
+    assert normalize_remembered_text("User: prefers dark mode") == "prefers dark mode"
+    assert normalize_remembered_text("Assistant:   uses Python 3.11") == "uses Python 3.11"
+    assert normalize_remembered_text("- prefers tabs always") == "prefers tabs always"
+    assert normalize_remembered_text("* User: runs on Linux") == "runs on Linux"
+    assert normalize_remembered_text("• Assistant: uses docker") == "uses docker"
+    # a non-label that merely starts with a role-ish word must be preserved
+    assert normalize_remembered_text("Users prefer tabs") == "Users prefer tabs"
+
+
+def test_normalize_caps_length_at_280_with_ellipsis():
+    short = "prefers tabs over spaces"
+    assert normalize_remembered_text(short) == short
+
+    long = "x" * 400
+    out = normalize_remembered_text(long)
+    assert len(out) <= 280
+    assert out.endswith("...")
+    assert out.startswith("x")
+
+    exactly = "y" * 280
+    assert normalize_remembered_text(exactly) == exactly
+    assert not normalize_remembered_text(exactly).endswith("...")
+
+
+# --- remember_candidates contract -----------------------------------------
+
+
+def test_remember_candidates_passes_normalized_text_directly_to_remember_fn():
+    candidates = [
+        CandidateMemory(text="User:   prefers   tabs\n\n  over spaces"),
+        CandidateMemory(text="- always uses Python 3.11"),
+    ]
+    seen = []
+    result = remember_candidates(candidates, seen.append)
+
+    assert seen == ["prefers tabs over spaces", "always uses Python 3.11"]
+    assert result == seen, "remember_candidates returns exactly the texts passed to remember_fn"
+
+
+# --- run_light_dream ordering + report fidelity ---------------------------
+
+
+def test_run_light_dream_searches_before_any_remember():
+    calls = []
+
+    def search_fn(query):
+        calls.append(("search", query))
+        return []
+
+    def remember_fn(text):
+        calls.append(("remember", text))
+
+    run_light_dream([DURABLE], search_fn=search_fn, remember_fn=remember_fn)
+
+    kinds = [k for k, _ in calls]
+    assert "search" in kinds and "remember" in kinds
+    last_search = max(i for i, k in enumerate(kinds) if k == "search")
+    first_remember = min(i for i, k in enumerate(kinds) if k == "remember")
+    assert last_search < first_remember, "every search must precede every remember"
+
+
+def test_run_light_dream_report_texts_match_remember_fn_exactly():
+    passed = []
+
+    def search_miss(query):
+        return []
+
+    report = run_light_dream(
+        ["  User:  prefers tabs   over spaces and uses Python 3.11 on Linux  "],
+        search_fn=search_miss,
+        remember_fn=passed.append,
+    )
+    assert report.remembered == 1
+    assert report.remembered_texts == passed
+    assert report.remembered_texts == [
+        "prefers tabs over spaces and uses Python 3.11 on Linux"
+    ]
