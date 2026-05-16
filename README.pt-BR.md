@@ -6,7 +6,15 @@
 
 Pacote de "sonho" (dreaming) e higiene de memória, com o MemPalace em primeiro lugar, para o [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-Este repositório é um MVP público em fase inicial. Ele **não** instala nem altera uma configuração real do Hermes ainda. Ele entrega o primeiro scaffold seguro de um plugin cuja função é fazer a consolidação de memória do Hermes usar o MemPalace como camada principal de memória semântica, em vez de inflar os arquivos internos `MEMORY.md` / `USER.md`.
+**O MVP público v0.1 está completo.** É um MVP honesto e seguro — **não** é
+um sistema pronto para produção. Ele entrega uma superfície segura funcional
+(planejamento de setup, apply explícito e opcional, `status` somente leitura,
+`schedule-plan` somente relatório) e uma engine de dreaming pura, sem
+dependências. Ele **não** instala o MemPalace, não cria cron, não escreve no
+Obsidian e não grava nenhuma memória. A prontidão para produção (ver
+[`ROADMAP.md`](ROADMAP.md)) permanece como trabalho futuro.
+
+Sua função é fazer a consolidação de memória do Hermes usar o MemPalace como camada principal de memória semântica, em vez de inflar os arquivos internos `MEMORY.md` / `USER.md`.
 
 ## O que ele faz hoje
 
@@ -19,6 +27,8 @@ Partes já implementadas:
 - Registra comandos de CLI:
   - `hermes mempalace-dreaming setup-plan` (sempre somente relatório)
   - `hermes mempalace-dreaming setup` (dry-run por padrão, `--apply` opcional)
+  - `hermes mempalace-dreaming status` (JSON somente leitura: versão, módulos, flags de segurança)
+  - `hermes mempalace-dreaming schedule-plan` (JSON somente relatório; nunca cria cron)
 - Fornece um planejador de setup em modo dry-run:
   - `build_setup_plan(...)`
 - Fornece uma camada de aplicação explícita:
@@ -31,7 +41,9 @@ Partes já implementadas:
 - Entrega um MVP de engine de dreaming puro e sem dependências:
   - `mempalace_dreaming/engine.py` (minerar → pontuar → filtrar → deduplicar → memorizar);
   - testável sem o runtime do Hermes; `search_fn` / `remember_fn` são injetados;
-  - rejeita conteúdo temporário/de progresso e segredos, mantém fatos duráveis.
+  - rejeita conteúdo temporário/de progresso e segredos, mantém fatos duráveis;
+  - `render_report(report)` → resumo markdown determinístico;
+  - `audit_retrieval_noise(results)` → classificação pura útil/ruído (sem gravar memória).
 - Inclui testes para:
   - registro do plugin;
   - contrato da skill;
@@ -96,6 +108,15 @@ python3 -m pytest tests -q
 
 ## Status
 
-Scaffold de MVP: utilizável como base de design/teste, ainda **não** pronto para produção. O setup/apply ainda não está pronto para produção.
+**MVP público v0.1 — completo.** Planejamento de setup seguro, apply
+explícito e opcional, `status` somente leitura, `schedule-plan` somente
+relatório e uma engine de dreaming pura estão todos implementados e testados.
+Utilizável como base de design/teste.
 
-Veja o [`ROADMAP.md`](ROADMAP.md) para os próximos passos de implementação.
+**Ainda não pronto para produção.** Instalação de provider, agendamento cron
+real e verificação contra uma instalação Hermes ativa permanecem como
+trabalho futuro.
+
+Veja [`docs/USAGE.md`](docs/USAGE.md) para comandos e modelo de segurança,
+[`CHANGELOG.md`](CHANGELOG.md) para a entrada v0.1.0, e
+[`ROADMAP.md`](ROADMAP.md) para o que está e o que não está pronto.

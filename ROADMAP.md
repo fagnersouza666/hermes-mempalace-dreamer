@@ -1,6 +1,10 @@
 # Roadmap
 
-## 0. Current MVP
+## 0. Public MVP v0.1 — COMPLETE
+
+This milestone is done. The repository ships a complete, honest, safe public
+MVP. It is **not** production-ready (see section 7); that is intentional and
+future work.
 
 Already implemented:
 
@@ -9,7 +13,13 @@ Already implemented:
 - Plugin-provided skill in `skills/mempalace-dreaming/SKILL.md`.
 - CLI commands:
   - `hermes mempalace-dreaming setup-plan` (always report-only);
-  - `hermes mempalace-dreaming setup` (dry-run by default, explicit `--apply`).
+  - `hermes mempalace-dreaming setup` (dry-run by default, explicit `--apply`);
+  - `hermes mempalace-dreaming status` (read-only JSON; no memory calls);
+  - `hermes mempalace-dreaming schedule-plan` (report-only JSON; no cron).
+- Pure engine reporting/audit surface:
+  - `render_report(report)` — deterministic markdown summary;
+  - `audit_retrieval_noise(results)` — useful/noisy classification, no writes.
+- Packaging metadata: `pyproject.toml` `[build-system]`, validated by tests.
 - Pure setup planner:
   - `build_setup_plan(...)`
 - Explicit setup apply layer:
@@ -53,22 +63,17 @@ Acceptance criteria:
 
 ## 2. Dreaming engine
 
-**MVP done:** `mempalace_dreaming/engine.py` ships a pure, dependency-free
+**v0.1 done:** `mempalace_dreaming/engine.py` ships a pure, dependency-free
 pipeline (`mine_candidates` → `score_candidate` → `filter_durable_candidates`
 → `dedupe_candidates` → `remember_candidates`, plus `run_light_dream`
-returning a `DreamReport`). `search_fn`/`remember_fn` are injected; no Hermes
-tools are imported. Covered by `tests/test_engine.py`.
+returning a `DreamReport`), `render_report()` (deterministic markdown) and
+`audit_retrieval_noise()` (useful/noisy classification, no memory writes).
+`search_fn`/`remember_fn` are injected; no Hermes tools are imported.
+Covered by `tests/test_engine.py`.
 
-Remaining engine stages:
-
-Add a pure Python engine module with testable stages:
-
-- `mine_sessions()`
-- `score_candidates()`
-- `dedupe_with_mempalace()`
-- `remember_candidates()`
-- `audit_retrieval_noise()`
-- `render_report()`
+Future engine work (post-v0.1): deeper REM-style integration (contradiction
+resolution, supersede detection, semantic clustering) wired to a live
+MemPalace provider.
 
 Rules:
 
