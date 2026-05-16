@@ -534,9 +534,53 @@ _DREAMING_RE = re.compile(
 )
 
 
+_CRON_BLOCK_HEADER_RE = re.compile(r"^\S+\s+\[[^\]]+\]\s*$")
+_CRON_BLOCK_NAME_RE = re.compile(r"^\s*name\s*[:=]\s*(.+?)\s*$", re.IGNORECASE)
+_CRON_BLOCK_SCHED_RE = re.compile(r"^\s*schedule\s*[:=]\s*(.+?)\s*$", re.IGNORECASE)
+
+
 def _is_dreaming_job(name: str) -> bool:
     """True when the job name looks dreaming-related."""
     return bool(_DREAMING_RE.search(name))
+
+
+def _parse_cron_blocks(stdout: str) -> list[dict]:
+    """Parse the real multi-line ``hermes cron list`` block format.
+
+    Each job is introduced by a header line like ``86ebf7425e3c [active]``
+    followed by indented ``Key: value`` lines (``Name:``, ``Schedule:``,
+    ``Repeat:``, ...). Returns ``[]`` when the input is not block-shaped so
+    the caller can fall back to the table/key-value parser. Never raises.
+    """
+    lines = stdout.splitlines()
+    if not any(_CRON_BLOCK_HEADER_RE.match(ln) for ln in lines):
+        return []
+
+    jobs: list[dict] = []
+    cur: dict | None = None
+
+    def _flush() -> None:
+        if cur and cur.get("name"):
+            jobs.append(cur)
+
+    for line in lines:
+        if _CRON_BLOCK_HEADER_RE.match(line):
+            _flush()
+            cur = {"name": "", "schedule": "", "raw": line.strip()}
+            continue
+        if cur is None:
+            continue
+        name_m = _CRON_BLOCK_NAME_RE.match(line)
+        if name_m:
+            cur["name"] = name_m.group(1).strip()
+            continue
+        sched_m = _CRON_BLOCK_SCHED_RE.match(line)
+        if sched_m:
+            value = sched_m.group(1).strip()
+            cron_m = _CRON_EXPR_RE.search(value)
+            cur["schedule"] = cron_m.group(0).strip() if cron_m else value
+    _flush()
+    return jobs
 
 
 def _parse_cron_jobs(stdout: str) -> list[dict]:
@@ -562,6 +606,15 @@ def _parse_cron_jobs(stdout: str) -> list[dict]:
             return result
     except (ValueError, TypeError):
         pass
+
+    # Real `hermes cron list` block format, e.g.:
+    #   86ebf7425e3c [active]
+    #     Name:      mempalace-dreaming-daily
+    #     Schedule:  30 08 * * *
+    #     Repeat:    ∞
+    block_jobs = _parse_cron_blocks(stdout)
+    if block_jobs:
+        return block_jobs
 
     jobs: list[dict] = []
     for line in stdout.splitlines():
@@ -607,52 +660,53 @@ def _parse_cron_jobs(stdout: str) -> list[dict]:
     return jobs
 
 
-def _parse_config_value(raw: str) -> object:
-    """Tolerant config value parser.
+def _lookup_dotted(data: object, dotted: str) -> tuple[bool, object]:
+    """Navigate a nested mapping by a dotted key.
 
-    Accepts bare ``true``/``false``, JSON, or ``key: value`` / ``key = value``
-    text. Returns the parsed Python value (bool, str, int, etc.).
-    Only treats text as key-value if there is at least one space before the
-    separator, or the separator is ``=``, to avoid misinterpreting values like
-    ``plugin:mempalace-dreaming`` as ``key: value``.
+    Tolerates ``-``/``_`` differences in a segment name (the live config
+    uses the dash-form plugin id ``mempalace-dreaming`` while doctor looks
+    it up via ``plugins.mempalace_dreaming.*``). Returns ``(found, value)``.
     """
-    text = raw.strip()
-    # Bare booleans (case-insensitive)
-    if text.lower() == "true":
-        return True
-    if text.lower() == "false":
-        return False
-    # Try JSON
+    node: object = data
+    for seg in dotted.split("."):
+        if not isinstance(node, dict):
+            return (False, None)
+        if seg in node:
+            node = node[seg]
+            continue
+        for alt in (seg.replace("_", "-"), seg.replace("-", "_")):
+            if alt in node:
+                node = node[alt]
+                break
+        else:
+            return (False, None)
+    return (True, node)
+
+
+def _read_hermes_config(path_str: str) -> tuple[dict | None, str | None]:
+    """Read and parse the Hermes YAML config (read-only).
+
+    Returns ``(data, None)`` on success or ``(None, reason)`` on any
+    failure. Never raises.
+    """
+    text_path = (path_str or "").strip()
+    if not text_path:
+        return (None, "`hermes config path` returned empty output")
     try:
-        return json.loads(text)
-    except (ValueError, TypeError):
-        pass
-    # key = value pattern (equals sign as separator)
-    eq_kv = re.match(r"^([^=\s][^=]*)=\s*(.+)$", text)
-    if eq_kv:
-        val = eq_kv.group(2).strip()
-        if val.lower() == "true":
-            return True
-        if val.lower() == "false":
-            return False
-        try:
-            return json.loads(val)
-        except (ValueError, TypeError):
-            return val
-    # "key: value" — only when there is at least one space before the colon
-    # (avoids "plugin:name" being split incorrectly)
-    colon_kv = re.match(r"^(\S+\s+\S+|\S{4,})\s*:\s+(.+)$", text)
-    if colon_kv:
-        val = colon_kv.group(2).strip()
-        if val.lower() == "true":
-            return True
-        if val.lower() == "false":
-            return False
-        try:
-            return json.loads(val)
-        except (ValueError, TypeError):
-            return val
-    return text
+        import yaml  # lazy: pyyaml may be absent in some runtimes
+    except ImportError:
+        return (None, "pyyaml is not available to parse the hermes config")
+    try:
+        raw = Path(text_path).expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
+        return (None, f"could not read hermes config at {text_path!r}: {exc}")
+    try:
+        data = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
+        return (None, f"could not parse hermes config YAML: {exc}")
+    if not isinstance(data, dict):
+        return (None, f"hermes config at {text_path!r} is not a mapping")
+    return (data, None)
 
 
 def _cron_fields_match(a: str, b: str) -> bool:
@@ -784,26 +838,55 @@ def build_doctor_report(
     config_checks: dict[str, Any] = {}
     config_coherent = True
 
+    # `hermes config` has no `get` subcommand; resolve the YAML path and read
+    # it directly (read-only). Any failure degrades into a JSON warning.
+    path_res = _safe_run(["hermes", "config", "path"])
+    config_data: dict | None = None
+    config_error: str | None = None
+    if not path_res.get("ok"):
+        config_error = (
+            path_res.get("error")
+            or f"`hermes config path` failed (exit {path_res.get('returncode')})"
+        )
+    else:
+        config_data, config_error = _read_hermes_config(path_res.get("stdout", ""))
+
+    if config_error is not None:
+        config_coherent = False
+        config_checks["config_error"] = config_error
+        warnings.append(f"could not read hermes config: {config_error}")
+        recommendations.append(
+            "verify `hermes config path` resolves to a readable YAML file"
+        )
+
     for key in expected_config:
-        res = _safe_run(["hermes", "config", "get", key])
-        raw_stdout = res.get("stdout", "")
-        parsed = _parse_config_value(raw_stdout) if res.get("ok") else None
         exp = expected_config[key]
-        if isinstance(exp, bool):
-            # Truthy check
-            ok_val = bool(parsed) if parsed is not None else False
+        if config_data is None:
+            found, parsed = False, None
         else:
-            ok_val = str(parsed).strip().lower() == str(exp).strip().lower() if parsed is not None else False
+            found, parsed = _lookup_dotted(config_data, key)
+        if not found:
+            ok_val = False
+        elif isinstance(exp, bool):
+            ok_val = bool(parsed)
+        else:
+            ok_val = str(parsed).strip().lower() == str(exp).strip().lower()
         config_checks[key] = {
-            "raw": raw_stdout,
-            "value": parsed,
+            "raw": "" if not found else str(parsed),
+            "value": parsed if found else None,
             "ok": ok_val,
             "expected": expected_desc[key],
         }
         if not ok_val:
             config_coherent = False
-            warnings.append(f"config key '{key}' is not set correctly (expected {expected_desc[key]}, got {parsed!r})")
-            recommendations.append(f"run: hermes config set {key} {exp}")
+            # Only emit a per-key warning when the config itself was readable;
+            # an unreadable config already produced a single aggregate warning.
+            if config_error is None:
+                warnings.append(
+                    f"config key '{key}' is not set correctly "
+                    f"(expected {expected_desc[key]}, got {parsed!r})"
+                )
+                recommendations.append(f"run: hermes config set {key} {exp}")
 
     config_checks["config_coherent"] = config_coherent
 
