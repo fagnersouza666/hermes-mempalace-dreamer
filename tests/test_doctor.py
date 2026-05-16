@@ -168,37 +168,41 @@ CONFIG_KEYS = [
     "plugins.mempalace_dreaming.skill",
 ]
 
-CONFIG_VALUES_OK = {
-    "memory.memory_enabled": "true",
-    "memory.user_profile_enabled": "true",
-    "memory.provider": "mempalace",
-    "plugins.mempalace_dreaming.enabled": "true",
-    "plugins.mempalace_dreaming.skill": "plugin:mempalace-dreaming",
-}
-
 CRON_LIST_WITH_DAILY = """\
 ID    NAME                          SCHEDULE         STATUS
 1     mempalace-dreaming-daily      30 08 * * *      active
 """
 
 
-def _build_all_green_runner(cron_stdout=CRON_LIST_WITH_DAILY, config_overrides=None):
-    config = dict(CONFIG_VALUES_OK)
+def _build_all_green_runner(tmp_path, cron_stdout=CRON_LIST_WITH_DAILY, config_overrides=None):
+    """All-green runner reflecting the real runtime contract.
+
+    Config is exposed via `hermes config path` -> a real YAML file (there is
+    no `hermes config get` subcommand), matching live Hermes behaviour.
+    ``config_overrides`` keeps the legacy dotted/string form for existing
+    tests; values are coerced to the proper YAML type.
+    """
+    typed_overrides = None
     if config_overrides:
-        config.update(config_overrides)
+        typed_overrides = {}
+        for dotted, raw in config_overrides.items():
+            if dotted.endswith("_enabled") and isinstance(raw, str):
+                typed_overrides[dotted] = raw.strip().lower() == "true"
+            else:
+                typed_overrides[dotted] = raw
+    cfg_path = _write_live_config(tmp_path, overrides=typed_overrides)
     mapping = {
         ("hermes", "--version"): _ok("hermes 1.2.3"),
         ("hermes", "memory", "status"): _ok(json.dumps({"provider": "mempalace"})),
+        ("hermes", "config", "path"): _ok(str(cfg_path)),
         ("hermes", "cron", "list"): _ok(cron_stdout),
     }
-    for key in CONFIG_KEYS:
-        mapping[("hermes", "config", "get", key)] = _ok(config.get(key, ""))
     return _fake_runner(mapping)
 
 
 def test_doctor_success_path_ok_true(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     assert report["ok"] is True
     assert report["warnings"] == []
@@ -212,7 +216,7 @@ def test_doctor_success_path_ok_true(tmp_path):
 
 def test_doctor_success_checks_plugin_presence(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     checks = report["checks"]
     assert checks["bundled_skill_exists"] is True
@@ -223,7 +227,7 @@ def test_doctor_success_checks_plugin_presence(tmp_path):
 
 def test_doctor_success_checks_memory(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     checks = report["checks"]
     assert checks["memory_status_ok"] is True
@@ -234,7 +238,7 @@ def test_doctor_success_checks_memory(tmp_path):
 
 def test_doctor_success_checks_config_coherent(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     config_checks = report["checks"]["config"]
     assert config_checks["config_coherent"] is True
@@ -250,7 +254,7 @@ def test_doctor_success_checks_config_coherent(tmp_path):
 
 def test_doctor_success_checks_cron(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     cron = report["checks"]["cron"]
     assert cron["daily_job_present"] is True
@@ -260,7 +264,7 @@ def test_doctor_success_checks_cron(tmp_path):
 
 def test_doctor_hermes_home_expanded(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     assert report["hermes_home"] == str(Path(tmp_path).expanduser())
 
@@ -272,13 +276,13 @@ def test_doctor_hermes_home_expanded(tmp_path):
 
 def test_doctor_provider_not_mempalace(tmp_path):
     module = load_plugin()
+    cfg_path = _write_live_config(tmp_path)
     mapping = {
         ("hermes", "--version"): _ok("hermes 1.2.3"),
         ("hermes", "memory", "status"): _ok(json.dumps({"provider": "builtin"})),
+        ("hermes", "config", "path"): _ok(str(cfg_path)),
         ("hermes", "cron", "list"): _ok(CRON_LIST_WITH_DAILY),
     }
-    for key in CONFIG_KEYS:
-        mapping[("hermes", "config", "get", key)] = _ok(CONFIG_VALUES_OK.get(key, ""))
     run_fn = _fake_runner(mapping)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     assert report["ok"] is False
@@ -296,10 +300,9 @@ def test_doctor_subprocess_failure_captured(tmp_path):
     mapping = {
         ("hermes", "--version"): _fail("command not found"),
         ("hermes", "memory", "status"): _fail("command not found"),
+        ("hermes", "config", "path"): _fail("command not found"),
         ("hermes", "cron", "list"): _fail("command not found"),
     }
-    for key in CONFIG_KEYS:
-        mapping[("hermes", "config", "get", key)] = _fail("command not found")
     run_fn = _fake_runner(mapping)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     assert report["ok"] is False
@@ -333,7 +336,7 @@ def test_doctor_run_fn_raises_no_traceback(tmp_path):
 
 def test_doctor_config_incoherent_memory_disabled(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner(
+    run_fn = _build_all_green_runner(tmp_path, 
         config_overrides={
             "memory.memory_enabled": "false",
             "memory.provider": "builtin",
@@ -364,7 +367,7 @@ ID    NAME                          SCHEDULE         STATUS
 
 def test_doctor_duplicate_dreaming_jobs(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner(cron_stdout=CRON_LIST_WITH_DUPLICATE)
+    run_fn = _build_all_green_runner(tmp_path, cron_stdout=CRON_LIST_WITH_DUPLICATE)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     cron = report["checks"]["cron"]
     assert cron["duplicate_dreaming_jobs"] is True
@@ -384,7 +387,7 @@ ID    NAME           SCHEDULE     STATUS
 
 def test_doctor_daily_job_absent(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner(cron_stdout=CRON_LIST_NO_DAILY)
+    run_fn = _build_all_green_runner(tmp_path, cron_stdout=CRON_LIST_NO_DAILY)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     cron = report["checks"]["cron"]
     assert cron["daily_job_present"] is False
@@ -401,7 +404,7 @@ def test_doctor_expected_time_match(tmp_path):
     """Daily job schedule matches converted UTC cron -> schedule_mismatch False."""
     module = load_plugin()
     # 08:30 UTC = 30 08 * * *
-    run_fn = _build_all_green_runner(cron_stdout=CRON_LIST_WITH_DAILY)
+    run_fn = _build_all_green_runner(tmp_path, cron_stdout=CRON_LIST_WITH_DAILY)
     report = module.build_doctor_report(
         str(tmp_path),
         run_fn=run_fn,
@@ -422,7 +425,7 @@ def test_doctor_expected_time_mismatch(tmp_path):
     """Daily job schedule differs from expected -> schedule_mismatch True, ok False."""
     module = load_plugin()
     # CRON_LIST_WITH_DAILY has 30 08 * * * but we ask for 06:00 UTC = 00 06 * * *
-    run_fn = _build_all_green_runner(cron_stdout=CRON_LIST_WITH_DAILY)
+    run_fn = _build_all_green_runner(tmp_path, cron_stdout=CRON_LIST_WITH_DAILY)
     report = module.build_doctor_report(
         str(tmp_path),
         run_fn=run_fn,
@@ -449,7 +452,7 @@ ID    NAME                          SCHEDULE         STATUS
 def test_doctor_expected_time_zero_pad_match(tmp_path):
     """'30 8 * * *' vs expected '30 08 * * *' must be treated as MATCH."""
     module = load_plugin()
-    run_fn = _build_all_green_runner(cron_stdout=CRON_LIST_ZERO_PAD)
+    run_fn = _build_all_green_runner(tmp_path, cron_stdout=CRON_LIST_ZERO_PAD)
     report = module.build_doctor_report(
         str(tmp_path),
         run_fn=run_fn,
@@ -467,7 +470,7 @@ def test_doctor_expected_time_zero_pad_match(tmp_path):
 
 def test_doctor_invalid_timezone_warning_no_traceback(tmp_path):
     module = load_plugin()
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
     # Must not raise
     report = module.build_doctor_report(
         str(tmp_path),
@@ -493,7 +496,7 @@ def test_doctor_no_expected_time_schedule_mismatch_is_none(tmp_path):
     module = load_plugin()
     # Use a weird schedule to confirm no false mismatch claim
     weird_cron = "ID    NAME                          SCHEDULE         STATUS\n1     mempalace-dreaming-daily      59 23 * * *      active\n"
-    run_fn = _build_all_green_runner(cron_stdout=weird_cron)
+    run_fn = _build_all_green_runner(tmp_path, cron_stdout=weird_cron)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
     cron = report["checks"]["cron"]
     assert cron["schedule_mismatch"] is None
@@ -525,7 +528,7 @@ def test_doctor_setup_import_fallback_when_package_not_importable(
     monkeypatch.delitem(sys.modules, "mempalace_dreaming.setup", raising=False)
     monkeypatch.delitem(sys.modules, "mempalace_dreaming.engine", raising=False)
 
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
 
     # Before the fix this raises:
     #   ModuleNotFoundError: No module named 'mempalace_dreaming'
@@ -552,7 +555,7 @@ def test_doctor_setup_genuinely_unavailable_no_traceback(
     # Force the plugin-local loader to fail too.
     monkeypatch.setattr(module, "_load_schedule_job_name", lambda: None)
 
-    run_fn = _build_all_green_runner()
+    run_fn = _build_all_green_runner(tmp_path)
     report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
 
     assert report["ok"] is False
@@ -600,3 +603,177 @@ def test_doctor_cli_graceful_no_hermes_binary(capsys, tmp_path):
     assert isinstance(payload["ok"], bool)
     assert payload["ok"] is False  # hermes not callable
     json.dumps(payload)
+
+
+# ---------------------------------------------------------------------------
+# Regression: live `hermes cron list` block format
+#
+# The real CLI does NOT emit only a simple table. Each job is a multi-line
+# block:
+#
+#   86ebf7425e3c [active]
+#     Name:      mempalace-dreaming-daily
+#     Schedule:  30 08 * * *
+#     Repeat:    ∞
+#
+# The previous parser turned this into a bogus job named "Schedule:" and
+# missed the real "mempalace-dreaming-daily" job entirely.
+# ---------------------------------------------------------------------------
+
+LIVE_CRON_BLOCK = """\
+86ebf7425e3c [active]
+  Name:      mempalace-dreaming-daily
+  Schedule:  30 08 * * *
+  Repeat:    ∞
+  Next run:  2026-05-17 08:30 UTC
+
+a1b2c3d4e5f6 [active]
+  Name:      backup-nightly
+  Schedule:  0 2 * * *
+  Repeat:    ∞
+"""
+
+
+def test_parse_cron_jobs_live_block_format():
+    """Real multi-line block output must be parsed correctly."""
+    module = load_plugin()
+    jobs = module._parse_cron_jobs(LIVE_CRON_BLOCK)
+    names = [j["name"] for j in jobs]
+    assert "mempalace-dreaming-daily" in names
+    assert "backup-nightly" in names
+    # No bogus "Schedule:" job leaked from the value line.
+    assert "Schedule:" not in names
+    daily = next(j for j in jobs if j["name"] == "mempalace-dreaming-daily")
+    assert daily["schedule"] == "30 08 * * *"
+
+
+# ---------------------------------------------------------------------------
+# Regression: config coherence read from the real YAML file
+#
+# `hermes config` has NO `get` subcommand (only show/edit/set/path/...).
+# doctor must resolve the YAML path via `hermes config path` and read it,
+# never invoke `hermes config get`.
+# ---------------------------------------------------------------------------
+
+
+def _write_live_config(tmp_path, overrides=None):
+    """Write a real-ish Hermes config YAML and return its path.
+
+    The plugins section uses the dash-form plugin id (``mempalace-dreaming``)
+    exactly as the live config does, while doctor looks it up via the
+    dotted ``plugins.mempalace_dreaming.*`` keys.
+    """
+    cfg = {
+        "memory": {
+            "memory_enabled": True,
+            "user_profile_enabled": True,
+            "provider": "mempalace",
+        },
+        "plugins": {
+            "mempalace-dreaming": {
+                "enabled": True,
+                "skill": "plugin:mempalace-dreaming",
+            }
+        },
+    }
+    if overrides:
+        for dotted, value in overrides.items():
+            node = cfg
+            parts = dotted.split(".")
+            # Normalize the plugin id segment to the dash form used on disk.
+            parts = [p.replace("mempalace_dreaming", "mempalace-dreaming") for p in parts]
+            for seg in parts[:-1]:
+                node = node.setdefault(seg, {})
+            node[parts[-1]] = value
+    import yaml
+
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return path
+
+
+def test_doctor_config_loaded_from_yaml_path(tmp_path):
+    """doctor reads config via `hermes config path` + YAML, not `config get`."""
+    module = load_plugin()
+    cfg_path = _write_live_config(tmp_path)
+    invoked = []
+
+    def run_fn(argv):
+        invoked.append(tuple(argv))
+        if tuple(argv) == ("hermes", "--version"):
+            return _ok("hermes 1.2.3")
+        if tuple(argv) == ("hermes", "memory", "status"):
+            return _ok(json.dumps({"provider": "mempalace"}))
+        if tuple(argv) == ("hermes", "config", "path"):
+            return _ok(str(cfg_path))
+        if tuple(argv) == ("hermes", "cron", "list"):
+            return _ok(LIVE_CRON_BLOCK)
+        raise AssertionError(f"unexpected command: {argv}")
+
+    report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
+
+    # Never call the nonexistent `hermes config get`.
+    assert not any(a[:3] == ("hermes", "config", "get") for a in invoked)
+    assert ("hermes", "config", "path") in invoked
+
+    config_checks = report["checks"]["config"]
+    assert config_checks["config_coherent"] is True
+    for key in CONFIG_KEYS:
+        assert config_checks[key]["ok"] is True, key
+
+
+def test_doctor_config_path_failure_warns_no_traceback(tmp_path):
+    """If `hermes config path` fails, doctor warns instead of crashing."""
+    module = load_plugin()
+
+    def run_fn(argv):
+        if tuple(argv) == ("hermes", "--version"):
+            return _ok("hermes 1.2.3")
+        if tuple(argv) == ("hermes", "memory", "status"):
+            return _ok(json.dumps({"provider": "mempalace"}))
+        if tuple(argv) == ("hermes", "config", "path"):
+            return _fail("config path: not found")
+        if tuple(argv) == ("hermes", "cron", "list"):
+            return _ok(LIVE_CRON_BLOCK)
+        raise AssertionError(f"unexpected command: {argv}")
+
+    report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
+    assert report["ok"] is False
+    assert report["checks"]["config"]["config_coherent"] is False
+    assert any("config" in w.lower() for w in report["warnings"])
+    assert report["recommendations"]
+    json.dumps(report)
+
+
+# ---------------------------------------------------------------------------
+# Regression: end-to-end doctor turns green with realistic live outputs
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_live_outputs_end_to_end_green(tmp_path):
+    """Realistic live config + cron block output => ok True, no warnings."""
+    module = load_plugin()
+    cfg_path = _write_live_config(tmp_path)
+
+    def run_fn(argv):
+        if tuple(argv) == ("hermes", "--version"):
+            return _ok("hermes 1.2.3")
+        if tuple(argv) == ("hermes", "memory", "status"):
+            return _ok(json.dumps({"provider": "mempalace"}))
+        if tuple(argv) == ("hermes", "config", "path"):
+            return _ok(str(cfg_path))
+        if tuple(argv) == ("hermes", "cron", "list"):
+            return _ok(LIVE_CRON_BLOCK)
+        raise AssertionError(f"unexpected command: {argv}")
+
+    report = module.build_doctor_report(
+        str(tmp_path),
+        run_fn=run_fn,
+        expected_time="05:30",
+        timezone="America/Sao_Paulo",
+    )
+    assert report["ok"] is True, report["warnings"]
+    assert report["warnings"] == []
+    assert report["checks"]["cron"]["daily_job_present"] is True
+    assert report["checks"]["config"]["config_coherent"] is True
+    json.dumps(report)
