@@ -16,10 +16,18 @@ Partes já implementadas:
 - Ponto de entrada do plugin em `__init__.py`.
 - Registra uma skill fornecida pelo plugin:
   - `skills/mempalace-dreaming/SKILL.md`
-- Registra um comando de CLI:
-  - `hermes mempalace-dreaming setup-plan`
+- Registra comandos de CLI:
+  - `hermes mempalace-dreaming setup-plan` (sempre somente relatório)
+  - `hermes mempalace-dreaming setup` (dry-run por padrão, `--apply` opcional)
 - Fornece um planejador de setup em modo dry-run:
   - `build_setup_plan(...)`
+- Fornece uma camada de aplicação explícita:
+  - `mempalace_dreaming/setup.py` (`build_config_commands`, `apply_setup_plan`);
+  - criação de diretórios e `hermes config set ...` só ocorrem com `--apply`;
+  - efeitos colaterais são injetados (`mkdir_fn` / `run_fn`) e testados unitariamente;
+  - comandos de config são listas argv, executadas via `subprocess` sem shell;
+  - o agendamento permanece planejado/somente relatório — **nenhum cron real é criado ainda**;
+  - notas de rollback são incluídas no resultado.
 - Entrega um MVP de engine de dreaming puro e sem dependências:
   - `mempalace_dreaming/engine.py` (minerar → pontuar → filtrar → deduplicar → memorizar);
   - testável sem o runtime do Hermes; `search_fn` / `remember_fn` são injetados;
@@ -31,7 +39,11 @@ Partes já implementadas:
   - saída JSON da CLI;
   - comportamento da engine de dreaming.
 
-O comando de setup atualmente apenas imprime um plano em JSON. Ele intencionalmente **não** altera `~/.hermes/config.yaml`, não cria cron jobs, não instala o MemPalace e não grava memórias.
+O `setup-plan` apenas imprime um plano em JSON. O `setup` usa por padrão o
+mesmo JSON dry-run; com a flag explícita `--apply` ele cria os diretórios
+planejados e executa os comandos `hermes config set ...`. Mesmo com `--apply`,
+o setup intencionalmente **não** cria cron jobs, não instala o MemPalace, não
+escreve no Obsidian e não grava nenhuma memória.
 
 ## Direção pretendida
 
@@ -73,9 +85,10 @@ python3 -m pytest tests -q
 
 ## Política de segurança atual
 
-- Sem alteração automática de configuração.
-- Sem criação automática de cron.
+- Sem alteração de configuração sem a flag explícita `setup --apply` (padrão é dry-run).
+- Sem criação automática de cron (o modo apply ainda não cria cron).
 - Sem escrita no Obsidian.
+- Sem gravação de memória durante o setup.
 - Sem fallback para a memória interna no caso de fatos duráveis normais.
 - Fallback de backend desconhecido é somente para relatório (report-only).
 - Exclusão/compactação de memória deve ser explícita e aprovada pelo usuário.
