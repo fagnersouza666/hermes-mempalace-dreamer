@@ -35,6 +35,7 @@ Current implemented pieces:
   - `hermes mempalace-dreaming verify-runtime` (live read-only environment check; no side effects)
   - `hermes mempalace-dreaming schedule-plan` (report-only JSON; never creates cron)
   - `hermes mempalace-dreaming lean-check` (report-only JSON; classifies local candidate material, no writes)
+  - `hermes mempalace-dreaming doctor` (read-only operational audit: plugin presence, memory provider, config coherence, cron state, duplicate/timezone-drift detection; never mutates anything)
 - Provides a dry-run setup planner:
   - `build_setup_plan(...)`
 - Provides an explicit apply layer:

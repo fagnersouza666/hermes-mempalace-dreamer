@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- add installation doctor command (read-only operational audit: plugin/memory/config/cron, duplicate & timezone drift detection).
+
 ## [1.0.0] - 2026-05-16
 
 Production-ready bootstrap v1.0. The plugin is now a safe bootstrap and

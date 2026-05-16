@@ -26,7 +26,10 @@ Already implemented:
   - `hermes mempalace-dreaming schedule-plan` (report-only JSON; no cron);
   - `hermes mempalace-dreaming lean-check` (report-only JSON; local
     `--input-file`/`--json-input`; classifies durable/noisy/secret/duplicate;
-    secrets redacted; no memory/cron/Obsidian/file writes).
+    secrets redacted; no memory/cron/Obsidian/file writes);
+  - `hermes mempalace-dreaming doctor` (read-only operational audit: plugin
+    presence, memory provider, config coherence, cron state, duplicate and
+    timezone-drift detection; never mutates anything). **Delivered.**
 - Pure engine reporting/audit surface:
   - `render_report(report)` — deterministic markdown summary;
   - `audit_retrieval_noise(results)` — useful/noisy classification, no writes;
