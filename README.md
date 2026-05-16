@@ -16,10 +16,18 @@ Current implemented pieces:
 - Plugin entrypoint in `__init__.py`.
 - Registers a plugin-provided skill:
   - `skills/mempalace-dreaming/SKILL.md`
-- Registers a CLI command:
-  - `hermes mempalace-dreaming setup-plan`
+- Registers CLI commands:
+  - `hermes mempalace-dreaming setup-plan` (always report-only)
+  - `hermes mempalace-dreaming setup` (dry-run by default, `--apply` opt-in)
 - Provides a dry-run setup planner:
   - `build_setup_plan(...)`
+- Provides an explicit apply layer:
+  - `mempalace_dreaming/setup.py` (`build_config_commands`, `apply_setup_plan`);
+  - directory creation and `hermes config set ...` run only with `--apply`;
+  - side effects are dependency-injected (`mkdir_fn` / `run_fn`) and unit-tested;
+  - config commands are argv lists, run via `subprocess` without a shell;
+  - schedule stays planned/report-only — **no real cron is created yet**;
+  - rollback notes are included in the result.
 - Ships a pure, dependency-free dreaming engine MVP:
   - `mempalace_dreaming/engine.py` (mine → score → filter → dedupe → remember);
   - testable without the Hermes runtime; `search_fn`/`remember_fn` are injected;
@@ -31,7 +39,11 @@ Current implemented pieces:
   - CLI JSON output;
   - dreaming engine behavior.
 
-The setup command currently prints a JSON plan. It intentionally does **not** change `~/.hermes/config.yaml`, create cron jobs, install MemPalace, or write memories.
+`setup-plan` only prints a JSON plan. `setup` defaults to the same dry-run
+JSON; with the explicit `--apply` flag it creates the planned directories and
+runs `hermes config set ...` commands. Even with `--apply`, setup intentionally
+does **not** create cron jobs, install MemPalace, write to Obsidian, or write
+any memories.
 
 ## Intended direction
 
@@ -73,9 +85,10 @@ python3 -m pytest tests -q
 
 ## Current safety policy
 
-- No automatic config mutation.
-- No automatic cron creation.
+- No config mutation without the explicit `setup --apply` flag (default is dry-run).
+- No automatic cron creation (apply mode still does not create cron).
 - No Obsidian writes.
+- No memory writes during setup.
 - No built-in memory fallback for normal durable facts.
 - Unknown backend fallback is report-only.
 - Memory deletion/compaction must be explicit and user-approved.
