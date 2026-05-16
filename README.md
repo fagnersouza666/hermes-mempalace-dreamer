@@ -1,5 +1,7 @@
 # Hermes MemPalace Dreamer
 
+**English** · [Português do Brasil](README.pt-BR.md)
+
 [![tests](https://github.com/fagnersouza666/hermes-mempalace-dreamer/actions/workflows/test.yml/badge.svg)](https://github.com/fagnersouza666/hermes-mempalace-dreamer/actions/workflows/test.yml)
 
 MemPalace-first dreaming and memory hygiene bundle for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
