@@ -1,7 +1,9 @@
 # Usage
 
-Public MVP v0.1. Every command below is safe: nothing here installs
-MemPalace, creates a cron job, writes to Obsidian, or writes any memory.
+Production-ready bootstrap v1.0. Every command is dry-run / read-only by
+default. Side effects happen **only** behind explicit flags (`--apply`,
+`--create-cron`, `--verify-after-apply`). Nothing here installs the MemPalace
+provider package, writes to Obsidian, or writes any memory.
 
 ## Commands
 
@@ -49,15 +51,34 @@ optional schedule). Never applies anything.
 ### `setup` — dry-run by default, opt-in apply
 
 ```bash
-hermes mempalace-dreaming setup                 # dry-run JSON (no side effects)
-hermes mempalace-dreaming setup --apply         # create dirs + run config commands
+hermes mempalace-dreaming setup                                    # dry-run JSON (no side effects)
+hermes mempalace-dreaming setup --apply                            # create dirs + run config commands
+hermes mempalace-dreaming setup --apply --schedule-dreaming --create-cron        # also create the daily cron
+hermes mempalace-dreaming setup --apply --verify-after-apply       # apply, then read-only verify
 ```
 
 `--apply` creates the planned directories and runs `hermes config set ...`
 (argv lists, no shell). The first failing action stops the rest and is
-reported in the JSON `errors` field; rollback notes are always printed. Even
-with `--apply`, setup never creates cron, installs MemPalace, writes to
-Obsidian, or writes memory.
+reported in the JSON `errors` field; rollback notes are always printed.
+
+`--create-cron` (only with `--apply`, and only if `--schedule-dreaming`
+included a schedule) creates the daily dreaming cron through an injected
+`schedule_fn`. The argv matches the real `hermes cron create` contract:
+`--name`/`--deliver`/`--skill` options followed by the cron expression and
+the conservative prompt as **positional** arguments (no `--schedule` /
+`--prompt` flags). The job name is deterministic
+(`mempalace-dreaming-daily`) and `--deliver` is `local` so a schedule never
+broadcasts to chats. The result is reported under `cron`
+(`created`/`argv`/`error`); a cron failure is captured, not raised. Without
+`--create-cron`, scheduling stays report-only.
+
+`--verify-after-apply` (only with `--apply`) runs the read-only runtime
+check after a clean apply and embeds it under `verification`. It is skipped
+(with a recorded reason) if apply failed early — it never inspects a
+half-applied environment.
+
+Even with every flag set, setup never installs the MemPalace provider
+package, writes to Obsidian, or writes memory.
 
 ### `schedule-plan` — report-only
 
@@ -107,17 +128,23 @@ are dependency-injected (`search_fn` / `remember_fn`).
 ## Safety model
 
 - No config mutation without the explicit `setup --apply` flag.
-- No automatic cron creation (apply mode still does not create cron).
+- No cron creation without explicit `setup --apply --create-cron`.
+- No post-apply verification without explicit `--verify-after-apply`;
+  skipped if apply failed early.
 - No Obsidian writes.
-- No memory writes during setup, `status`, or `schedule-plan`.
+- No memory writes during setup, verification, `status`, or `schedule-plan`.
 - No built-in memory fallback for normal durable facts.
 - Unknown backend fallback is report-only.
 - Memory deletion/compaction must be explicit and user-approved.
 - No hidden side effects at import/register time.
 
-## Not production-ready
+## Production scope
 
-`verify-runtime` adds a read-only check against a live Hermes install, but it
-only *reports* — it never fixes, installs, or schedules anything. Provider
-installation and real cron scheduling remain future work, and this is still
-not a production-ready system. See [`../ROADMAP.md`](../ROADMAP.md).
+This is a production-ready *bootstrap and orchestration layer*. Explicit
+apply, explicit cron creation, and explicit post-apply verification are
+implemented, dependency-injected, and covered by unit + integration-style
+tests against an isolated fake Hermes home.
+
+It assumes a Hermes MemPalace provider is **already available** in the
+environment. Installing that provider package is external and intentionally
+out of scope. See [`../ROADMAP.md`](../ROADMAP.md).

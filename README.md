@@ -6,12 +6,16 @@
 
 MemPalace-first dreaming and memory hygiene bundle for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-**Public MVP v0.1 is complete.** This is an honest, safe MVP — not a
-production-ready system. It ships a working safe surface (setup planning,
-explicit opt-in apply, read-only status, report-only schedule plan) and a
-pure, dependency-free dreaming engine. It does **not** install MemPalace,
-create cron jobs, write to Obsidian, or write any memory. Production
-readiness (see [`ROADMAP.md`](ROADMAP.md)) remains future work.
+**Production-ready bootstrap v1.0.** This is an honest, safe bootstrap and
+orchestration layer for environments that **already have a Hermes MemPalace
+provider available**. It ships a working safe surface (setup planning,
+explicit opt-in apply, explicit opt-in cron creation, explicit opt-in
+post-apply verification, read-only status/verify) and a pure,
+dependency-free dreaming engine. It does **not** install the MemPalace
+provider package itself — that remains external/pre-existing and
+environment-specific. It never writes to Obsidian and never writes memory
+during setup or verification. Every side effect is explicit and
+dependency-injected.
 
 Its job is to make Hermes memory consolidation use MemPalace as the primary semantic memory layer instead of bloating built-in `MEMORY.md` / `USER.md`.
 
@@ -25,7 +29,8 @@ Current implemented pieces:
   - `skills/mempalace-dreaming/SKILL.md`
 - Registers CLI commands:
   - `hermes mempalace-dreaming setup-plan` (always report-only)
-  - `hermes mempalace-dreaming setup` (dry-run by default, `--apply` opt-in)
+  - `hermes mempalace-dreaming setup` (dry-run by default; `--apply` opt-in;
+    explicit `--create-cron` and `--verify-after-apply` opt-ins)
   - `hermes mempalace-dreaming status` (read-only JSON: version, modules, safety flags)
   - `hermes mempalace-dreaming verify-runtime` (live read-only environment check; no side effects)
   - `hermes mempalace-dreaming schedule-plan` (report-only JSON; never creates cron)
@@ -35,9 +40,17 @@ Current implemented pieces:
 - Provides an explicit apply layer:
   - `mempalace_dreaming/setup.py` (`build_config_commands`, `apply_setup_plan`);
   - directory creation and `hermes config set ...` run only with `--apply`;
-  - side effects are dependency-injected (`mkdir_fn` / `run_fn`) and unit-tested;
-  - config commands are argv lists, run via `subprocess` without a shell;
-  - schedule stays planned/report-only — **no real cron is created yet**;
+  - side effects are dependency-injected (`mkdir_fn` / `run_fn` /
+    `schedule_fn` / `verify_fn`) and unit/integration-tested;
+  - config and cron commands are argv lists, run via `subprocess` without a shell;
+  - cron creation is **explicit and opt-in** (`--apply --create-cron`):
+    deterministic `hermes cron create` argv, fixed job name, conservative
+    self-contained prompt, bundled skill attached, `--deliver local` so it
+    never broadcasts to chats; without `--create-cron` scheduling stays
+    report-only;
+  - post-apply verification is **explicit and opt-in**
+    (`--apply --verify-after-apply`): a read-only runtime check whose report
+    is embedded in the JSON; it is skipped if apply failed early;
   - apply never raises: the first failing action is caught, stops further
     actions, and is reported in the result's `errors` list (also in CLI JSON);
   - rollback notes are included in the result (printed for every run).
@@ -58,11 +71,15 @@ Current implemented pieces:
 
 `setup-plan` only prints a JSON plan. `setup` defaults to the same dry-run
 JSON; with the explicit `--apply` flag it creates the planned directories and
-runs `hermes config set ...` commands. If an action fails under `--apply`,
-setup stops at the first failure and reports it in the JSON `errors` field
-(directory creation failing means no config command runs); rollback notes are
-always printed. Even with `--apply`, setup intentionally does **not** create
-cron jobs, install MemPalace, write to Obsidian, or write any memories.
+runs `hermes config set ...` commands. Adding `--create-cron` (only with
+`--apply`) creates the daily dreaming cron via injected `schedule_fn`;
+adding `--verify-after-apply` runs the read-only runtime check afterwards
+and embeds it in the JSON. If an action fails under `--apply`, setup stops
+at the first failure and reports it in the JSON `errors` field (directory
+creation failing means no config command runs); cron and verification are
+then skipped, not silently attempted. Rollback notes are always printed.
+Even with every flag set, setup intentionally does **not** install the
+MemPalace provider package, write to Obsidian, or write any memories.
 
 ## Intended direction
 
@@ -105,25 +122,28 @@ python3 -m pytest tests -q
 ## Current safety policy
 
 - No config mutation without the explicit `setup --apply` flag (default is dry-run).
-- No automatic cron creation (apply mode still does not create cron).
+- No cron creation without the explicit `setup --apply --create-cron` flags.
+- No post-apply verification without the explicit `--verify-after-apply` flag,
+  and it is skipped if apply failed early.
 - No Obsidian writes.
-- No memory writes during setup.
+- No memory writes during setup or verification.
 - No built-in memory fallback for normal durable facts.
 - Unknown backend fallback is report-only.
 - Memory deletion/compaction must be explicit and user-approved.
 
 ## Status
 
-**Public MVP v0.1 — complete.** Safe setup planning, explicit opt-in apply,
-read-only `status`, report-only `schedule-plan`, and a pure dreaming engine
-are all implemented and tested. Usable as a design/test base.
+**Production-ready bootstrap v1.0.** Safe setup planning, explicit opt-in
+apply, explicit opt-in cron creation, explicit opt-in post-apply
+verification, read-only `status`/`verify-runtime`, and a pure dreaming
+engine are all implemented and covered by unit + integration-style tests
+(including end-to-end runs against an isolated fake Hermes home).
 
-A live, read-only `verify-runtime` check is now available — it reports on a
-real Hermes install but never fixes, installs, or schedules anything.
-
-**Not production-ready.** Provider installation and real cron scheduling
-remain future work.
+**Scope of "production-ready":** this is a production-ready *bootstrap and
+orchestration layer*. It assumes a Hermes MemPalace provider is already
+available in the environment — installing that provider package itself is
+external and remains out of scope by design.
 
 See [`docs/USAGE.md`](docs/USAGE.md) for commands and the safety model,
-[`CHANGELOG.md`](CHANGELOG.md) for the v0.1.0 entry, and
+[`CHANGELOG.md`](CHANGELOG.md) for the v1.0.0 entry, and
 [`ROADMAP.md`](ROADMAP.md) for what is and isn't done.

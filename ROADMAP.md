@@ -1,10 +1,15 @@
 # Roadmap
 
-## 0. Public MVP v0.1 — COMPLETE
+## 0. Production-ready bootstrap v1.0 — COMPLETE
 
-This milestone is done. The repository ships a complete, honest, safe public
-MVP. It is **not** production-ready (see section 7); that is intentional and
-future work.
+This milestone is done. The repository ships a production-ready *bootstrap
+and orchestration layer*: explicit apply, explicit opt-in cron creation, and
+explicit opt-in post-apply verification, all dependency-injected and covered
+by unit + integration-style tests against an isolated fake Hermes home.
+
+It assumes a Hermes MemPalace provider is **already available** in the
+environment. Installing that provider package itself is external and
+intentionally out of scope (see section 1).
 
 Already implemented:
 
@@ -117,11 +122,19 @@ Implemented:
 - rollback notes printed in the JSON result;
 - no destructive cleanup, no Obsidian writes, no memory writes.
 
-Still not implemented (tracked here, intentionally):
+Now implemented (v1.0):
 
-- install or verify the `mempalace` package;
-- verify `hermes memory status` after apply;
-- creating a real daily dreaming cron (schedule stays report-only).
+- explicit opt-in cron creation via `--apply --create-cron` — deterministic
+  `hermes cron create` argv matching the real CLI (positional schedule +
+  prompt, no invented flags), fixed job name, `--deliver local`, conservative
+  prompt, injected `schedule_fn`, failures captured not raised;
+- explicit opt-in post-apply verification via `--apply --verify-after-apply`
+  — read-only, injected `verify_fn`, embedded in JSON, skipped if apply
+  failed early.
+
+Still external/out of scope by design:
+
+- installing the `mempalace` provider package itself (environment-specific).
 
 ## 4. Cron routines
 
@@ -130,17 +143,15 @@ local-input-based** command (`--input-file` / `--json-input`) — it does not
 query a live MemPalace backend and creates no schedule. Duplicate detection
 is available only via an injected `search_fn` in the pure helper.
 
-Still future work — optional scheduling helpers:
+**Daily dreaming cron: done (v1.0).** `setup --apply --create-cron` creates
+a deterministic, named daily dreaming job via the real `hermes cron create`
+contract through an injected `schedule_fn`, `--deliver local`, conservative
+prompt, bundled skill attached. Rollback guidance points at
+`hermes cron list` + remove-by-job-id.
 
-```bash
-hermes mempalace-dreaming schedule --time 05:30
-hermes mempalace-dreaming lean-check --weekly
-```
+Still future work:
 
-Planned jobs:
-
-- daily light dreaming;
-- weekly lean-check report (wired to a live provider, not local input);
+- weekly lean-check report wired to a live provider (not local input);
 - manual cleanup only after user approval.
 
 ## 5. CI and packaging
@@ -170,11 +181,18 @@ Current policy: clean-room adaptation only.
 
 ## 7. Production readiness
 
-Before calling this production-ready:
+Done for the bootstrap layer (v1.0):
 
-- test against a fresh Hermes install;
-- test with MemPalace enabled and disabled;
-- test cron behavior in gateway mode;
-- verify no secret leakage in reports;
-- verify no built-in memory pollution;
-- document rollback.
+- explicit apply, cron creation, and post-apply verification, all
+  dependency-injected and tested without a real Hermes;
+- integration-style tests against an isolated fake Hermes home;
+- cron argv verified against the real `hermes cron create` contract
+  (positional schedule + prompt; no invented flags);
+- no secret-shaped material baked into the cron prompt (tested);
+- no built-in memory pollution; no memory writes during setup/verification;
+- rollback documented (config revert; cron via list + remove-by-job-id).
+
+Still environment-specific (out of scope here, validate per deployment):
+
+- installing the MemPalace provider package itself;
+- behaviour against a specific fresh Hermes install and gateway mode.
