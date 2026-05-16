@@ -371,6 +371,22 @@ def _setup_cli_parser(parser) -> None:
     )
     schedule_plan.set_defaults(func=_handle_cli)
 
+    lean_check = sub.add_parser(
+        "lean-check",
+        help="Report-only lean-check of candidate memory material (no writes)",
+    )
+    lean_check.add_argument(
+        "--input-file",
+        default=None,
+        help="Path to a file with one candidate/retrieval text per line",
+    )
+    lean_check.add_argument(
+        "--json-input",
+        default=None,
+        help='JSON array of candidate texts (or {"text": ...} objects)',
+    )
+    lean_check.set_defaults(func=_handle_cli)
+
 
 def _default_mkdir(path: str) -> None:
     Path(path).expanduser().mkdir(parents=True, exist_ok=True)
@@ -431,6 +447,71 @@ def _apply_setup_from_args(args, *, mkdir_fn=_default_mkdir, run_fn=_default_run
     )
 
 
+def _load_build_lean_check_report():
+    """Resolve ``build_lean_check_report`` without depending on ``sys.path``.
+
+    Mirrors :func:`_load_apply_setup_plan`: normal package import first, then
+    a direct load of ``mempalace_dreaming/engine.py`` from :data:`PLUGIN_DIR`
+    when the plugin file is loaded standalone.
+    """
+    try:
+        from mempalace_dreaming.engine import build_lean_check_report
+
+        return build_lean_check_report
+    except ImportError:
+        import importlib.util
+        import sys
+
+        engine_path = PLUGIN_DIR / "mempalace_dreaming" / "engine.py"
+        spec = importlib.util.spec_from_file_location(
+            "mempalace_dreaming_engine", engine_path
+        )
+        if spec is None or spec.loader is None:  # pragma: no cover - defensive
+            raise
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module.build_lean_check_report
+
+
+def _coerce_lean_check_inputs(data: object) -> list[object]:
+    """Accept a JSON array of strings or ``{"text": ...}`` objects."""
+    if isinstance(data, list):
+        return list(data)
+    return []
+
+
+def _read_lean_check_inputs(args) -> tuple[list[object], list[str]]:
+    """Build the candidate list from CLI args, never raising.
+
+    Returns ``(candidates, warnings)``. A missing input file or invalid JSON
+    becomes a warning and an empty list -- the command stays report-only and
+    never crashes. Reads only; writes nothing.
+    """
+    warnings: list[str] = []
+
+    json_input = getattr(args, "json_input", None)
+    if json_input:
+        try:
+            return _coerce_lean_check_inputs(json.loads(json_input)), warnings
+        except (ValueError, TypeError) as exc:
+            warnings.append(f"--json-input is not valid JSON: {exc}")
+            return [], warnings
+
+    input_file = getattr(args, "input_file", None)
+    if input_file:
+        path = Path(input_file).expanduser()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            warnings.append(f"input file not found / unreadable: {exc}")
+            return [], warnings
+        lines = [line.strip() for line in text.splitlines()]
+        return [line for line in lines if line], warnings
+
+    return [], warnings
+
+
 def _handle_cli(args) -> None:
     cmd = getattr(args, "mempalace_dreaming_command", None)
     if cmd == "status":
@@ -445,6 +526,14 @@ def _handle_cli(args) -> None:
     if cmd == "schedule-plan":
         plan = build_schedule_plan(time=getattr(args, "time", "05:30"))
         print(json.dumps(plan, indent=2, ensure_ascii=False))
+        return
+    if cmd == "lean-check":
+        build_lean_check_report = _load_build_lean_check_report()
+        candidates, input_warnings = _read_lean_check_inputs(args)
+        report = build_lean_check_report(
+            candidates, extra_warnings=input_warnings
+        )
+        print(json.dumps(report, indent=2, ensure_ascii=False))
         return
     if cmd == "setup":
         result = _apply_setup_from_args(args)

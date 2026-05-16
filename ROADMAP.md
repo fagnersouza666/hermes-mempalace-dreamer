@@ -18,10 +18,15 @@ Already implemented:
   - `hermes mempalace-dreaming verify-runtime` (live read-only environment
     check; runs `hermes --version` / `hermes memory status` captured, detects
     the memory provider, checks bundled skill/modules/dirs; mutates nothing);
-  - `hermes mempalace-dreaming schedule-plan` (report-only JSON; no cron).
+  - `hermes mempalace-dreaming schedule-plan` (report-only JSON; no cron);
+  - `hermes mempalace-dreaming lean-check` (report-only JSON; local
+    `--input-file`/`--json-input`; classifies durable/noisy/secret/duplicate;
+    secrets redacted; no memory/cron/Obsidian/file writes).
 - Pure engine reporting/audit surface:
   - `render_report(report)` — deterministic markdown summary;
-  - `audit_retrieval_noise(results)` — useful/noisy classification, no writes.
+  - `audit_retrieval_noise(results)` — useful/noisy classification, no writes;
+  - `build_lean_check_report(candidates, search_fn=…)` — report-only
+    classification (durable/noisy/secret/duplicate), deterministic, no writes.
 - Packaging metadata: `pyproject.toml` `[build-system]`, validated by tests.
 - Pure setup planner:
   - `build_setup_plan(...)`
@@ -120,7 +125,12 @@ Still not implemented (tracked here, intentionally):
 
 ## 4. Cron routines
 
-Add optional scheduling helpers:
+**Partially addressed.** `lean-check` exists today as a **report-only,
+local-input-based** command (`--input-file` / `--json-input`) — it does not
+query a live MemPalace backend and creates no schedule. Duplicate detection
+is available only via an injected `search_fn` in the pure helper.
+
+Still future work — optional scheduling helpers:
 
 ```bash
 hermes mempalace-dreaming schedule --time 05:30
@@ -130,7 +140,7 @@ hermes mempalace-dreaming lean-check --weekly
 Planned jobs:
 
 - daily light dreaming;
-- weekly lean-check report;
+- weekly lean-check report (wired to a live provider, not local input);
 - manual cleanup only after user approval.
 
 ## 5. CI and packaging

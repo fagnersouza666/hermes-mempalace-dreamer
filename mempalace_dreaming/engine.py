@@ -176,6 +176,129 @@ def audit_retrieval_noise(
     return report
 
 
+# --- lean-check (report-only, no writes of any kind) ----------------------
+
+# A clean candidate is "noisy" enough to recommend tightening recall when its
+# share of the input exceeds this. A duplicate share above the second
+# threshold suggests memory is accumulating near-dupes.
+_LEAN_NOISE_RATE = 0.5
+_LEAN_DUPLICATE_RATE = 0.3
+# Examples are capped so the report stays small and never dumps a corpus.
+_LEAN_EXAMPLE_CAP = 5
+# Secret-like material is classified but never echoed back into the report.
+_LEAN_SECRET_PLACEHOLDER = "[redacted: secret-like content]"
+
+
+def build_lean_check_report(
+    candidates: Iterable[object],
+    *,
+    search_fn: SearchFn | None = None,
+    extra_warnings: Sequence[str] = (),
+) -> dict:
+    """Classify candidate memory/retrieval material into a safe JSON report.
+
+    Pure and side-effect free: it never reads or writes memory, cron, config,
+    or the filesystem. ``search_fn`` is injected (never imported) and is only
+    consulted for *clean* candidates -- secret-like and noisy material is
+    never sent to the search backend. When ``search_fn`` is omitted, no
+    duplicate detection is attempted.
+
+    Classification per non-empty candidate (first match wins):
+
+    * ``secret``    -- matches the secret-like patterns; text is **redacted**
+      in the report (counts/warnings only, never the literal);
+    * ``noisy``     -- matches the temporary/progress patterns;
+    * ``duplicate`` -- clean, and ``search_fn`` returned a non-empty result;
+    * ``durable``   -- clean, and not a duplicate.
+
+    The result is JSON-serializable and deterministic for a given input and a
+    deterministic ``search_fn``. ``extra_warnings`` (e.g. a CLI "input file
+    not found") are merged verbatim into ``warnings``.
+    """
+    counts = {"durable": 0, "noisy": 0, "secret": 0, "duplicate": 0}
+    examples: dict[str, list[str]] = {
+        "durable": [],
+        "noisy": [],
+        "secret": [],
+        "duplicate": [],
+    }
+    warnings: list[str] = list(extra_warnings)
+    recommendations: list[str] = []
+    search_failed = False
+
+    def _add_example(kind: str, text: str) -> None:
+        bucket = examples[kind]
+        if len(bucket) < _LEAN_EXAMPLE_CAP:
+            bucket.append(text)
+
+    for raw in candidates:
+        text = _result_text(raw)
+        if not text:
+            continue
+
+        if _matches_any(_SECRET_PATTERNS, text):
+            counts["secret"] += 1
+            _add_example("secret", _LEAN_SECRET_PLACEHOLDER)
+            continue
+        if _matches_any(_TEMPORARY_PATTERNS, text):
+            counts["noisy"] += 1
+            _add_example("noisy", text)
+            continue
+
+        is_duplicate = False
+        if search_fn is not None:
+            try:
+                is_duplicate = bool(search_fn(text))
+            except Exception:  # noqa: BLE001 - report, never crash lean-check
+                search_failed = True
+                is_duplicate = False
+        if is_duplicate:
+            counts["duplicate"] += 1
+            _add_example("duplicate", text)
+        else:
+            counts["durable"] += 1
+            _add_example("durable", text)
+
+    total = sum(counts.values())
+
+    if total == 0:
+        warnings.append("no candidate input provided; nothing to lean-check")
+    if counts["secret"]:
+        warnings.append(
+            f"secret-like content found in {counts['secret']} candidate(s); "
+            "never persist these"
+        )
+    if search_failed:
+        warnings.append(
+            "duplicate search failed for some candidates; "
+            "treated them as non-duplicate"
+        )
+
+    if total and counts["noisy"] / total > _LEAN_NOISE_RATE:
+        recommendations.append(
+            "noisy recall looks high; consider tightening what gets mined"
+        )
+    if total and counts["duplicate"] / total > _LEAN_DUPLICATE_RATE:
+        recommendations.append(
+            "duplicate rate looks high; memory may be accumulating near-dupes"
+        )
+
+    return {
+        "report_only": True,
+        "total": total,
+        "counts": counts,
+        "examples": examples,
+        "warnings": warnings,
+        "recommendations": recommendations,
+        "safety": {
+            "report_only": True,
+            "no_memory_writes": True,
+            "no_cron": True,
+            "no_obsidian_writes": True,
+        },
+    }
+
+
 def render_report(report: DreamReport) -> str:
     """Render a :class:`DreamReport` as deterministic markdown.
 

@@ -30,6 +30,7 @@ Partes já implementadas:
   - `hermes mempalace-dreaming status` (JSON somente leitura: versão, módulos, flags de segurança)
   - `hermes mempalace-dreaming verify-runtime` (verificação ao vivo somente leitura do ambiente; sem efeitos colaterais)
   - `hermes mempalace-dreaming schedule-plan` (JSON somente relatório; nunca cria cron)
+  - `hermes mempalace-dreaming lean-check` (JSON somente relatório; classifica material candidato local, sem gravações)
 - Fornece um planejador de setup em modo dry-run:
   - `build_setup_plan(...)`
 - Fornece uma camada de aplicação explícita:
@@ -44,7 +45,9 @@ Partes já implementadas:
   - testável sem o runtime do Hermes; `search_fn` / `remember_fn` são injetados;
   - rejeita conteúdo temporário/de progresso e segredos, mantém fatos duráveis;
   - `render_report(report)` → resumo markdown determinístico;
-  - `audit_retrieval_noise(results)` → classificação pura útil/ruído (sem gravar memória).
+  - `audit_retrieval_noise(results)` → classificação pura útil/ruído (sem gravar memória);
+  - `build_lean_check_report(candidates, search_fn=…)` → JSON somente relatório classificando
+    material candidato em durável / ruído / segredo / duplicado (segredos redatados, sem gravações).
 - Inclui testes para:
   - registro do plugin;
   - contrato da skill;

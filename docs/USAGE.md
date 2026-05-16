@@ -69,6 +69,28 @@ Prints only a JSON schedule plan describing what a conservative daily
 dreaming cron would look like. **No cron job is created.** Schedule it
 yourself with your Hermes cron tooling if you want automation.
 
+### `lean-check` — report-only
+
+```bash
+hermes mempalace-dreaming lean-check --input-file candidates.txt
+hermes mempalace-dreaming lean-check --json-input '["User prefers tabs on Linux"]'
+hermes mempalace-dreaming lean-check                 # no input -> valid JSON + warning
+```
+
+Classifies candidate memory/retrieval material into `durable`, `noisy`,
+`secret`, and `duplicate` and prints a JSON report with counts, capped
+example texts, `warnings`, and heuristic `recommendations` (e.g. "noisy
+recall looks high", "duplicate rate looks high", a secret-found warning).
+
+It is strictly **report-only and local-input-based** in the public MVP: it
+reads `--input-file` (one candidate text per line) or `--json-input` (a JSON
+array of strings or `{"text": ...}` objects) and writes nothing — no memory,
+cron, config, Obsidian, or files. It does **not** query a live MemPalace
+backend; duplicate detection only happens when a `search_fn` is injected into
+the pure helper. Secret-like material is counted and warned about but its
+text is **redacted** in the report, never echoed back. Missing input,
+unreadable files, or invalid JSON become warnings, not a crash.
+
 ## Pure engine API
 
 `mempalace_dreaming.engine` imports no Hermes runtime. Memory reads/writes
@@ -78,6 +100,9 @@ are dependency-injected (`search_fn` / `remember_fn`).
 - `render_report(report)` → deterministic markdown string
 - `audit_retrieval_noise(results)` → `RetrievalAuditReport` (useful vs noisy;
   pure, never writes memory)
+- `build_lean_check_report(candidates, search_fn=…, extra_warnings=…)` →
+  report-only JSON dict (durable / noisy / secret / duplicate counts +
+  redacted examples + warnings/recommendations; pure, no writes)
 
 ## Safety model
 

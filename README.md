@@ -29,6 +29,7 @@ Current implemented pieces:
   - `hermes mempalace-dreaming status` (read-only JSON: version, modules, safety flags)
   - `hermes mempalace-dreaming verify-runtime` (live read-only environment check; no side effects)
   - `hermes mempalace-dreaming schedule-plan` (report-only JSON; never creates cron)
+  - `hermes mempalace-dreaming lean-check` (report-only JSON; classifies local candidate material, no writes)
 - Provides a dry-run setup planner:
   - `build_setup_plan(...)`
 - Provides an explicit apply layer:
@@ -45,7 +46,9 @@ Current implemented pieces:
   - testable without the Hermes runtime; `search_fn`/`remember_fn` are injected;
   - rejects temporary/progress content and secrets, keeps durable facts;
   - `render_report(report)` → deterministic markdown summary;
-  - `audit_retrieval_noise(results)` → pure useful/noisy classification (no memory writes).
+  - `audit_retrieval_noise(results)` → pure useful/noisy classification (no memory writes);
+  - `build_lean_check_report(candidates, search_fn=…)` → report-only JSON classifying candidate
+    material into durable / noisy / secret / duplicate (secrets redacted, no writes).
 - Includes tests for:
   - plugin registration;
   - skill contract;
