@@ -10,6 +10,15 @@ follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 
 - add installation doctor command (read-only operational audit: plugin/memory/config/cron, duplicate & timezone drift detection).
 
+### Fixed
+
+- harden `doctor` import fallback: `build_doctor_report()` no longer crashes
+  with `ModuleNotFoundError: No module named 'mempalace_dreaming'` in the
+  installed-plugin context. It now resolves `SCHEDULE_JOB_NAME` via the same
+  plugin-local loading strategy used by `setup`/`apply`/`lean-check`, and
+  reports the setup module as a JSON warning instead of raising when it is
+  genuinely unavailable.
+
 ## [1.0.0] - 2026-05-16
 
 Production-ready bootstrap v1.0. The plugin is now a safe bootstrap and

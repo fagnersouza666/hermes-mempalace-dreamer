@@ -500,6 +500,69 @@ def test_doctor_no_expected_time_schedule_mismatch_is_none(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Regression: installed-plugin context
+#
+# In the installed plugin, `mempalace_dreaming` is not guaranteed to be on
+# sys.path, so `from mempalace_dreaming.setup import SCHEDULE_JOB_NAME`
+# raises ModuleNotFoundError. doctor must fall back to the plugin-local
+# loader (the same strategy already used by setup/apply and lean-check)
+# instead of crashing with a traceback.
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_setup_import_fallback_when_package_not_importable(
+    tmp_path, monkeypatch
+):
+    """Package import of mempalace_dreaming.setup fails but the plugin-local
+    file is present: build_doctor_report must still return a JSON report.
+    """
+    module = load_plugin()
+
+    # Simulate the installed-plugin case: the package cannot be imported by
+    # name (None in sys.modules makes `import mempalace_dreaming` raise),
+    # while mempalace_dreaming/setup.py is still present in PLUGIN_DIR.
+    monkeypatch.setitem(sys.modules, "mempalace_dreaming", None)
+    monkeypatch.delitem(sys.modules, "mempalace_dreaming.setup", raising=False)
+    monkeypatch.delitem(sys.modules, "mempalace_dreaming.engine", raising=False)
+
+    run_fn = _build_all_green_runner()
+
+    # Before the fix this raises:
+    #   ModuleNotFoundError: No module named 'mempalace_dreaming'
+    report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
+
+    assert report["ok"] is True
+    assert report["warnings"] == []
+    assert report["checks"]["setup_module_available"] is True
+    assert report["checks"]["cron"]["daily_job_present"] is True
+    json.dumps(report)
+
+
+def test_doctor_setup_genuinely_unavailable_no_traceback(
+    tmp_path, monkeypatch
+):
+    """If the setup module is genuinely unavailable (no package import and
+    no resolvable plugin-local SCHEDULE_JOB_NAME), doctor must degrade into
+    a JSON warning instead of raising.
+    """
+    module = load_plugin()
+
+    monkeypatch.setitem(sys.modules, "mempalace_dreaming", None)
+    monkeypatch.delitem(sys.modules, "mempalace_dreaming.setup", raising=False)
+    # Force the plugin-local loader to fail too.
+    monkeypatch.setattr(module, "_load_schedule_job_name", lambda: None)
+
+    run_fn = _build_all_green_runner()
+    report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
+
+    assert report["ok"] is False
+    assert any("setup" in w.lower() for w in report["warnings"])
+    # No traceback: still a serializable structure.
+    assert "checks" in report
+    json.dumps(report)
+
+
+# ---------------------------------------------------------------------------
 # CLI wiring
 # ---------------------------------------------------------------------------
 

@@ -699,7 +699,7 @@ def build_doctor_report(
             (schedule_mismatch stays None). Omitting ``expected_time`` entirely
             also keeps schedule_mismatch None.
     """
-    from mempalace_dreaming.setup import SCHEDULE_JOB_NAME  # noqa: PLC0415
+    schedule_job_name = _load_schedule_job_name()
 
     home = Path(hermes_home).expanduser()
     warnings: list[str] = []
@@ -814,12 +814,22 @@ def build_doctor_report(
     cron_jobs = _parse_cron_jobs(cron_res.get("stdout", ""))
 
     dreaming_jobs = [j for j in cron_jobs if _is_dreaming_job(j.get("name", ""))]
-    daily_job_present = any(j["name"] == SCHEDULE_JOB_NAME for j in dreaming_jobs)
+    daily_job_present = schedule_job_name is not None and any(
+        j["name"] == schedule_job_name for j in dreaming_jobs
+    )
     duplicate_dreaming_jobs = len(dreaming_jobs) > 1
 
-    if not daily_job_present:
+    if schedule_job_name is None:
         warnings.append(
-            f"daily dreaming job '{SCHEDULE_JOB_NAME}' is not present in cron list"
+            "could not resolve the dreaming job name "
+            "(mempalace_dreaming.setup unavailable); skipped cron presence check"
+        )
+        recommendations.append(
+            "check that mempalace_dreaming/setup.py is present in the plugin directory"
+        )
+    elif not daily_job_present:
+        warnings.append(
+            f"daily dreaming job '{schedule_job_name}' is not present in cron list"
         )
         recommendations.append(
             f"run: hermes mempalace-dreaming setup --apply --schedule-dreaming --create-cron"
@@ -846,7 +856,8 @@ def build_doctor_report(
             expected_cron_utc = conv["cron_utc"]
             # Find the daily job and compare
             daily_job = next(
-                (j for j in dreaming_jobs if j["name"] == SCHEDULE_JOB_NAME), None
+                (j for j in dreaming_jobs if j["name"] == schedule_job_name),
+                None,
             )
             if daily_job is not None:
                 job_schedule = daily_job.get("schedule", "")
@@ -968,6 +979,47 @@ def _load_apply_setup_plan():
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         return module.apply_setup_plan
+
+
+def _load_schedule_job_name() -> str | None:
+    """Resolve ``SCHEDULE_JOB_NAME`` without depending on ``sys.path``.
+
+    Mirrors :func:`_load_apply_setup_plan`: normal package import first, then
+    a direct load of ``mempalace_dreaming/setup.py`` from :data:`PLUGIN_DIR`
+    when the plugin file is loaded standalone (the installed-plugin case,
+    where ``mempalace_dreaming`` is not guaranteed to be importable by name).
+
+    Unlike :func:`_load_apply_setup_plan`, this never raises: it returns
+    ``None`` if the setup module is genuinely unavailable, so
+    :func:`build_doctor_report` can degrade into a JSON warning instead of
+    crashing with a traceback.
+    """
+    try:
+        from mempalace_dreaming.setup import SCHEDULE_JOB_NAME
+
+        return SCHEDULE_JOB_NAME
+    except ImportError:
+        pass
+
+    import importlib.util
+    import sys
+
+    setup_path = PLUGIN_DIR / "mempalace_dreaming" / "setup.py"
+    if not setup_path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location(
+        "mempalace_dreaming_setup", setup_path
+    )
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    # Register before exec so dataclasses can resolve annotations.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001 - doctor must never raise
+        return None
+    return getattr(module, "SCHEDULE_JOB_NAME", None)
 
 
 def _apply_setup_from_args(
