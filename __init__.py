@@ -487,6 +487,25 @@ def _setup_cli_parser(parser) -> None:
     )
     schedule_plan.set_defaults(func=_handle_cli)
 
+    doctor = sub.add_parser(
+        "doctor",
+        help="Read-only operational audit: plugin/memory/config/cron (no side effects)",
+    )
+    doctor.add_argument(
+        "--hermes-home", default="~/.hermes", help="Hermes home directory"
+    )
+    doctor.add_argument(
+        "--expected-time",
+        default=None,
+        help="Expected wall-clock time (HH:MM) to compare against the live cron schedule",
+    )
+    doctor.add_argument(
+        "--timezone",
+        default=None,
+        help="IANA timezone for --expected-time conversion (omit to skip schedule comparison)",
+    )
+    doctor.set_defaults(func=_handle_cli)
+
     lean_check = sub.add_parser(
         "lean-check",
         help="Report-only lean-check of candidate memory material (no writes)",
@@ -502,6 +521,405 @@ def _setup_cli_parser(parser) -> None:
         help='JSON array of candidate texts (or {"text": ...} objects)',
     )
     lean_check.set_defaults(func=_handle_cli)
+
+
+# ---------------------------------------------------------------------------
+# Doctor helpers
+# ---------------------------------------------------------------------------
+
+_CRON_EXPR_RE = re.compile(r"(\d{1,2})\s+(\d{1,2})\s+(\*|\d+)\s+(\*|\d+)\s+(\*|\d+)")
+_DREAMING_RE = re.compile(
+    r"dream|sonho|mempalace-dreaming",
+    re.IGNORECASE,
+)
+
+
+def _is_dreaming_job(name: str) -> bool:
+    """True when the job name looks dreaming-related."""
+    return bool(_DREAMING_RE.search(name))
+
+
+def _parse_cron_jobs(stdout: str) -> list[dict]:
+    """Tolerant, never-raising parser for ``hermes cron list`` output.
+
+    Accepts table-ish lines, ``name: ... schedule: ...`` key-value lines, and
+    JSON arrays. Returns a list of dicts with at minimum ``name``, ``schedule``
+    (a 5-field cron expression or ``""``), and ``raw`` (the original line or
+    JSON item).
+    """
+    if not stdout or not stdout.strip():
+        return []
+    try:
+        # Try JSON first
+        data = json.loads(stdout)
+        if isinstance(data, list):
+            result: list[dict] = []
+            for item in data:
+                if isinstance(item, dict):
+                    name = str(item.get("name", "")).strip()
+                    schedule = str(item.get("schedule", "")).strip()
+                    result.append({"name": name, "schedule": schedule, "raw": str(item)})
+            return result
+    except (ValueError, TypeError):
+        pass
+
+    jobs: list[dict] = []
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Key-value format: "name: ... schedule: ..."
+        kv_name_match = re.search(
+            r"\bname\s*[:=]\s*([A-Za-z][A-Za-z0-9_.:\-\s]*?)(?=\s+schedule\b|$)",
+            stripped,
+        )
+        if kv_name_match:
+            name = kv_name_match.group(1).strip()
+            cron_m = _CRON_EXPR_RE.search(stripped)
+            schedule = cron_m.group(0).strip() if cron_m else ""
+            jobs.append({"name": name, "schedule": schedule, "raw": stripped})
+            continue
+
+        # Table-style: look for a cron expression anywhere in the line
+        cron_m = _CRON_EXPR_RE.search(stripped)
+        if cron_m:
+            schedule = cron_m.group(0).strip()
+            before = stripped[: cron_m.start()].strip()
+            # Tokenize the part before the cron expression, skipping:
+            # - pure-digit tokens (ID column)
+            # - all-uppercase short tokens <= 8 chars (header columns like ID/NAME/SCHEDULE)
+            tokens = before.split()
+            name_tokens: list[str] = []
+            for tok in tokens:
+                if tok.isdigit():
+                    continue
+                if tok.isupper() and len(tok) <= 8:
+                    continue
+                name_tokens.append(tok)
+            if name_tokens:
+                # Rebuild the name from the original text starting at the
+                # first accepted token through to the cron expression.
+                first_tok = name_tokens[0]
+                idx = before.find(first_tok)
+                candidate_name = before[idx:].strip()
+                jobs.append({"name": candidate_name, "schedule": schedule, "raw": stripped})
+    return jobs
+
+
+def _parse_config_value(raw: str) -> object:
+    """Tolerant config value parser.
+
+    Accepts bare ``true``/``false``, JSON, or ``key: value`` / ``key = value``
+    text. Returns the parsed Python value (bool, str, int, etc.).
+    Only treats text as key-value if there is at least one space before the
+    separator, or the separator is ``=``, to avoid misinterpreting values like
+    ``plugin:mempalace-dreaming`` as ``key: value``.
+    """
+    text = raw.strip()
+    # Bare booleans (case-insensitive)
+    if text.lower() == "true":
+        return True
+    if text.lower() == "false":
+        return False
+    # Try JSON
+    try:
+        return json.loads(text)
+    except (ValueError, TypeError):
+        pass
+    # key = value pattern (equals sign as separator)
+    eq_kv = re.match(r"^([^=\s][^=]*)=\s*(.+)$", text)
+    if eq_kv:
+        val = eq_kv.group(2).strip()
+        if val.lower() == "true":
+            return True
+        if val.lower() == "false":
+            return False
+        try:
+            return json.loads(val)
+        except (ValueError, TypeError):
+            return val
+    # "key: value" — only when there is at least one space before the colon
+    # (avoids "plugin:name" being split incorrectly)
+    colon_kv = re.match(r"^(\S+\s+\S+|\S{4,})\s*:\s+(.+)$", text)
+    if colon_kv:
+        val = colon_kv.group(2).strip()
+        if val.lower() == "true":
+            return True
+        if val.lower() == "false":
+            return False
+        try:
+            return json.loads(val)
+        except (ValueError, TypeError):
+            return val
+    return text
+
+
+def _cron_fields_match(a: str, b: str) -> bool:
+    """Compare two 5-field cron expressions field-by-field.
+
+    The first two fields (minute, hour) are compared as integers to handle
+    zero-padding differences (e.g. ``8`` vs ``08``). The remaining three
+    fields are compared as strings.
+    """
+    fa = a.split()
+    fb = b.split()
+    if len(fa) != 5 or len(fb) != 5:
+        return False
+    try:
+        if int(fa[0]) != int(fb[0]):
+            return False
+        if int(fa[1]) != int(fb[1]):
+            return False
+    except ValueError:
+        return False
+    return fa[2:] == fb[2:]
+
+
+def build_doctor_report(
+    hermes_home: str | Path = "~/.hermes",
+    *,
+    run_fn: VerifyRunFn = _default_verify_run,
+    expected_time: str | None = None,
+    timezone: str | None = None,
+) -> dict[str, Any]:
+    """Read-only operational audit of the MemPalace Dreaming installation.
+
+    Checks plugin presence, memory provider, config coherence, and cron state.
+    Never raises — every failure is captured into the returned JSON-serializable
+    dict. Never writes to config, memory, cron, Obsidian, or the filesystem.
+
+    Args:
+        hermes_home: Hermes home directory (default ``~/.hermes``).
+        run_fn: Injectable runner (default :func:`_default_verify_run`).
+        expected_time: Optional ``"HH:MM"`` wall-clock time to compare against
+            the live cron schedule (after UTC conversion via ``timezone``).
+        timezone: IANA timezone for ``expected_time`` conversion. If ``None``
+            and ``expected_time`` is given, no schedule comparison is made
+            (schedule_mismatch stays None). Omitting ``expected_time`` entirely
+            also keeps schedule_mismatch None.
+    """
+    from mempalace_dreaming.setup import SCHEDULE_JOB_NAME  # noqa: PLC0415
+
+    home = Path(hermes_home).expanduser()
+    warnings: list[str] = []
+    recommendations: list[str] = []
+
+    def _safe_run(argv: list[str]) -> dict:
+        try:
+            return run_fn(argv)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": "",
+                "error": str(exc),
+            }
+
+    # ------------------------------------------------------------------
+    # 1. Plugin presence
+    # ------------------------------------------------------------------
+    bundled_skill_exists = SKILL_PATH.is_file()
+    engine_module_available = _module_importable("mempalace_dreaming.engine")
+    setup_module_available = _module_importable("mempalace_dreaming.setup")
+
+    if not bundled_skill_exists:
+        warnings.append("bundled skill file is missing")
+        recommendations.append("re-clone or reinstall the plugin to restore the skill file")
+    if not engine_module_available:
+        warnings.append("mempalace_dreaming.engine module is not available")
+        recommendations.append("check that mempalace_dreaming/engine.py is present in the plugin directory")
+    if not setup_module_available:
+        warnings.append("mempalace_dreaming.setup module is not available")
+        recommendations.append("check that mempalace_dreaming/setup.py is present in the plugin directory")
+
+    # ------------------------------------------------------------------
+    # 2. Memory / Hermes CLI
+    # ------------------------------------------------------------------
+    version_res = _safe_run(["hermes", "--version"])
+    status_res = _safe_run(["hermes", "memory", "status"])
+
+    hermes_cli_callable = bool(version_res.get("ok"))
+    memory_status_ok = bool(status_res.get("ok"))
+    memory_provider = (
+        _detect_memory_provider(status_res.get("stdout", ""))
+        if memory_status_ok
+        else None
+    )
+    provider_is_mempalace = memory_provider == "mempalace"
+
+    if not hermes_cli_callable:
+        detail = version_res.get("error") or f"exit {version_res.get('returncode')}"
+        warnings.append(f"hermes CLI is not callable: {detail}")
+        recommendations.append("ensure hermes is installed and on PATH")
+    if not memory_status_ok:
+        detail = status_res.get("error") or f"exit {status_res.get('returncode')}"
+        warnings.append(f"'hermes memory status' failed: {detail}")
+        recommendations.append("check hermes memory configuration")
+    elif not provider_is_mempalace:
+        warnings.append(
+            f"memory provider is not 'mempalace' (detected: {memory_provider!r})"
+        )
+        recommendations.append("set memory.provider=mempalace in hermes config")
+
+    # ------------------------------------------------------------------
+    # 3. Config coherence
+    # ------------------------------------------------------------------
+    expected_config: dict[str, object] = {
+        "memory.memory_enabled": True,
+        "memory.user_profile_enabled": True,
+        "memory.provider": "mempalace",
+        "plugins.mempalace_dreaming.enabled": True,
+        "plugins.mempalace_dreaming.skill": "plugin:mempalace-dreaming",
+    }
+    expected_desc: dict[str, str] = {
+        "memory.memory_enabled": "truthy",
+        "memory.user_profile_enabled": "truthy",
+        "memory.provider": '"mempalace"',
+        "plugins.mempalace_dreaming.enabled": "truthy",
+        "plugins.mempalace_dreaming.skill": '"plugin:mempalace-dreaming"',
+    }
+
+    config_checks: dict[str, Any] = {}
+    config_coherent = True
+
+    for key in expected_config:
+        res = _safe_run(["hermes", "config", "get", key])
+        raw_stdout = res.get("stdout", "")
+        parsed = _parse_config_value(raw_stdout) if res.get("ok") else None
+        exp = expected_config[key]
+        if isinstance(exp, bool):
+            # Truthy check
+            ok_val = bool(parsed) if parsed is not None else False
+        else:
+            ok_val = str(parsed).strip().lower() == str(exp).strip().lower() if parsed is not None else False
+        config_checks[key] = {
+            "raw": raw_stdout,
+            "value": parsed,
+            "ok": ok_val,
+            "expected": expected_desc[key],
+        }
+        if not ok_val:
+            config_coherent = False
+            warnings.append(f"config key '{key}' is not set correctly (expected {expected_desc[key]}, got {parsed!r})")
+            recommendations.append(f"run: hermes config set {key} {exp}")
+
+    config_checks["config_coherent"] = config_coherent
+
+    # ------------------------------------------------------------------
+    # 4. Cron inspection
+    # ------------------------------------------------------------------
+    cron_res = _safe_run(["hermes", "cron", "list"])
+    cron_jobs = _parse_cron_jobs(cron_res.get("stdout", ""))
+
+    dreaming_jobs = [j for j in cron_jobs if _is_dreaming_job(j.get("name", ""))]
+    daily_job_present = any(j["name"] == SCHEDULE_JOB_NAME for j in dreaming_jobs)
+    duplicate_dreaming_jobs = len(dreaming_jobs) > 1
+
+    if not daily_job_present:
+        warnings.append(
+            f"daily dreaming job '{SCHEDULE_JOB_NAME}' is not present in cron list"
+        )
+        recommendations.append(
+            f"run: hermes mempalace-dreaming setup --apply --schedule-dreaming --create-cron"
+        )
+    if duplicate_dreaming_jobs:
+        dup_names = [j["name"] for j in dreaming_jobs]
+        warnings.append(
+            f"duplicate dreaming-like cron jobs detected: {dup_names!r}"
+        )
+        recommendations.append(
+            "run `hermes cron list` and remove the duplicate/legacy job by id"
+        )
+
+    # ------------------------------------------------------------------
+    # 5. Expected schedule comparison
+    # ------------------------------------------------------------------
+    schedule_mismatch: bool | None = None
+    expected_cron_utc: str | None = None
+    expected_schedule_error: str | None = None
+
+    if expected_time is not None and timezone is not None:
+        try:
+            conv = convert_to_utc_cron(expected_time, timezone)
+            expected_cron_utc = conv["cron_utc"]
+            # Find the daily job and compare
+            daily_job = next(
+                (j for j in dreaming_jobs if j["name"] == SCHEDULE_JOB_NAME), None
+            )
+            if daily_job is not None:
+                job_schedule = daily_job.get("schedule", "")
+                if _cron_fields_match(job_schedule, expected_cron_utc):
+                    schedule_mismatch = False
+                else:
+                    schedule_mismatch = True
+                    warnings.append(
+                        f"schedule mismatch: daily job has '{job_schedule}' "
+                        f"but expected '{expected_cron_utc}' "
+                        f"(from {expected_time!r} in {timezone!r})"
+                    )
+                    recommendations.append(
+                        f"update or recreate the cron job with schedule '{expected_cron_utc}'"
+                    )
+            # If daily job absent, schedule_mismatch stays None
+        except ZoneInfoNotFoundError as exc:
+            expected_schedule_error = f"unknown timezone {timezone!r}: {exc}"
+            warnings.append(
+                f"--timezone {timezone!r} is not a valid IANA timezone: {exc}"
+            )
+            # schedule_mismatch stays None, expected_cron_utc stays None
+
+    cron_check: dict[str, Any] = {
+        "daily_job_present": daily_job_present,
+        "dreaming_jobs": dreaming_jobs,
+        "duplicate_dreaming_jobs": duplicate_dreaming_jobs,
+        "schedule_mismatch": schedule_mismatch,
+    }
+    if expected_cron_utc is not None:
+        cron_check["expected_cron_utc"] = expected_cron_utc
+    elif expected_time is not None and timezone is not None:
+        # Timezone error branch
+        cron_check["expected_cron_utc"] = None
+    if expected_schedule_error is not None:
+        cron_check["expected_schedule_error"] = expected_schedule_error
+
+    # ------------------------------------------------------------------
+    # ok rollup
+    # ------------------------------------------------------------------
+    ok = (
+        hermes_cli_callable
+        and memory_status_ok
+        and provider_is_mempalace
+        and bundled_skill_exists
+        and engine_module_available
+        and setup_module_available
+        and config_coherent
+        and daily_job_present
+        and not duplicate_dreaming_jobs
+        and schedule_mismatch is not True
+    )
+
+    return {
+        "plugin": PLUGIN_NAME,
+        "version": PLUGIN_VERSION,
+        "hermes_home": str(home),
+        "ok": ok,
+        "warnings": warnings,
+        "recommendations": recommendations,
+        "checks": {
+            "bundled_skill_exists": bundled_skill_exists,
+            "engine_module_available": engine_module_available,
+            "setup_module_available": setup_module_available,
+            "plugin_status": PLUGIN_STATUS,
+            "hermes_cli_callable": hermes_cli_callable,
+            "memory_status_ok": memory_status_ok,
+            "memory_provider": memory_provider,
+            "provider_is_mempalace": provider_is_mempalace,
+            "config": config_checks,
+            "cron": cron_check,
+        },
+    }
 
 
 def _default_mkdir(path: str) -> None:
@@ -677,6 +1095,14 @@ def _handle_cli(args) -> None:
             timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
         )
         print(json.dumps(plan, indent=2, ensure_ascii=False))
+        return
+    if cmd == "doctor":
+        report = build_doctor_report(
+            hermes_home=getattr(args, "hermes_home", "~/.hermes"),
+            expected_time=getattr(args, "expected_time", None),
+            timezone=getattr(args, "timezone", None),
+        )
+        print(json.dumps(report, indent=2, ensure_ascii=False))
         return
     if cmd == "lean-check":
         build_lean_check_report = _load_build_lean_check_report()

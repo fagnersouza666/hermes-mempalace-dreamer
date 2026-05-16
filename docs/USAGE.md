@@ -123,6 +123,74 @@ about "local time", scheduling is timezone-aware:
   resolved from a fixed reference date so conversion stays deterministic;
   the plan output includes a `dst_caveat` note.
 
+### `doctor` — read-only operational audit
+
+```bash
+hermes mempalace-dreaming doctor
+hermes mempalace-dreaming doctor --hermes-home ~/.hermes
+hermes mempalace-dreaming doctor --expected-time 08:30 --timezone America/Sao_Paulo
+```
+
+Runs a complete read-only audit of the installation and prints a JSON report.
+It is strictly **read-only**: it runs only `hermes --version`, `hermes memory
+status`, `hermes config get <key>`, and `hermes cron list` (all via an
+injectable `run_fn`) and stats files. It **never** writes to config, memory,
+cron, Obsidian, or any file. The report is always JSON-serializable and always
+carries `ok`, `warnings`, `recommendations`, and `checks`.
+
+#### Checks performed
+
+1. **Plugin presence** — whether the bundled skill file, `mempalace_dreaming.engine`, and `mempalace_dreaming.setup` are present on disk.
+2. **Memory / Hermes CLI** — whether `hermes --version` succeeds (CLI callable) and `hermes memory status` returns a `mempalace` provider.
+3. **Config coherence** — reads each of these keys via `hermes config get` and checks their values:
+   - `memory.memory_enabled` (expect truthy)
+   - `memory.user_profile_enabled` (expect truthy)
+   - `memory.provider` (expect `"mempalace"`)
+   - `plugins.mempalace_dreaming.enabled` (expect truthy)
+   - `plugins.mempalace_dreaming.skill` (expect `"plugin:mempalace-dreaming"`)
+
+   Mismatches append specific warnings and recommendations to the report.
+4. **Cron inspection** — parses `hermes cron list` output tolerantly (table, key-value, or JSON). Reports:
+   - `daily_job_present`: whether `mempalace-dreaming-daily` exists;
+   - `dreaming_jobs`: list of parsed jobs that look dreaming-related (matches names containing "dream", "sonho", or "mempalace-dreaming");
+   - `duplicate_dreaming_jobs`: true if more than one dreaming-like job is found (including legacy names like `Sonhos diários MemPalace`).
+
+#### Optional schedule comparison
+
+```bash
+hermes mempalace-dreaming doctor --expected-time 05:30 --timezone America/Sao_Paulo
+```
+
+When `--expected-time` is provided together with `--timezone`, the tool
+converts the requested wall-clock time to a UTC cron via the same
+`convert_to_utc_cron` logic used by `schedule-plan`. It then compares that
+expected UTC cron against the schedule of the `mempalace-dreaming-daily` job,
+field-by-field (integer comparison for minute/hour, so `8` and `08` are
+treated as equal). `schedule_mismatch` is:
+
+- `false` — daily job exists and its schedule matches the expected UTC cron;
+- `true` — daily job exists but its schedule differs (warning + recommendation added);
+- `null` — no `--expected-time` given, or the daily job is absent, or the timezone was invalid.
+
+An unknown `--timezone` adds a warning and sets `schedule_mismatch` to `null`
+(never a traceback; never a spurious mismatch claim).
+
+**Omitting `--expected-time`** keeps `schedule_mismatch` null and makes no
+schedule-mismatch claim. Presence and duplicate checks still run.
+
+#### ok / warnings / recommendations
+
+`ok` is `true` only if all checks pass: CLI callable, memory status ok, provider
+is mempalace, skill/engine/setup present, config coherent, daily job present,
+no duplicate jobs, and `schedule_mismatch` is not `true`.
+
+Each failing condition appends a specific warning; recommendations give the
+concrete next action (e.g. `hermes config set memory.provider mempalace`, or
+"run `hermes cron list` and remove the duplicate/legacy job by id").
+
+Doctor reports, it does **not** fix. No config writes, no cron changes, no
+memory or file writes.
+
 ### `lean-check` — report-only
 
 ```bash
@@ -172,6 +240,7 @@ are dependency-injected (`search_fn` / `remember_fn`).
 - Unknown backend fallback is report-only.
 - Memory deletion/compaction must be explicit and user-approved.
 - No hidden side effects at import/register time.
+- `doctor` is read-only: runs only read commands (`hermes --version`, `hermes memory status`, `hermes config get`, `hermes cron list`) and stats files; never writes config, memory, cron, Obsidian, or any file.
 
 ## Production scope
 
