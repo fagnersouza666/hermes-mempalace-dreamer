@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
+
+VerifyRunFn = Callable[[Sequence[str]], dict]
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 SKILL_PATH = PLUGIN_DIR / "skills" / "mempalace-dreaming" / "SKILL.md"
@@ -124,6 +127,204 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
     return plan
 
 
+def _default_verify_run(argv: Sequence[str]) -> dict:
+    """Run ``argv`` read-only and never raise.
+
+    Captures the outcome as a JSON-serializable dict. A missing binary, a
+    timeout, or any other failure is returned as ``ok=False`` with an
+    ``error`` string instead of propagating an exception. This only ever
+    reads (``hermes --version`` / ``hermes memory status``); it mutates
+    nothing.
+    """
+    try:
+        proc = subprocess.run(
+            list(argv),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": proc.stdout or "",
+            "stderr": proc.stderr or "",
+            "error": "",
+        }
+    except FileNotFoundError as exc:
+        return {
+            "ok": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": "",
+            "error": f"command not found: {exc}",
+        }
+    except Exception as exc:  # noqa: BLE001 - report, never crash verify
+        return {
+            "ok": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": "",
+            "error": str(exc),
+        }
+
+
+_PROVIDER_RE = re.compile(
+    r"\bprovider\b\s*[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9_.-]+)",
+    re.IGNORECASE,
+)
+
+
+def _detect_memory_provider(stdout: str) -> str | None:
+    """Best-effort, lowercase memory provider name from status output.
+
+    Tolerant and side-effect free: tries JSON first (top-level ``provider``
+    or a nested ``memory.provider``), then falls back to a permissive regex
+    over plain text. Returns ``None`` when nothing provider-like is found.
+    Never raises.
+    """
+    if not stdout or not stdout.strip():
+        return None
+    try:
+        data = json.loads(stdout)
+    except (ValueError, TypeError):
+        data = None
+    if isinstance(data, dict):
+        provider = data.get("provider")
+        if provider is None and isinstance(data.get("memory"), dict):
+            provider = data["memory"].get("provider")
+        if isinstance(provider, str) and provider.strip():
+            return provider.strip().lower()
+    match = _PROVIDER_RE.search(stdout)
+    if match:
+        return match.group(1).strip().lower()
+    return None
+
+
+def build_runtime_verification(
+    hermes_home: str | Path = "~/.hermes",
+    *,
+    run_fn: VerifyRunFn = _default_verify_run,
+) -> dict[str, Any]:
+    """Read-only verification of the live Hermes environment.
+
+    Pure with respect to side effects: it only *reads* (runs ``hermes
+    --version`` and ``hermes memory status`` via ``run_fn``, stats files)
+    and never mutates config, memory, cron, or the filesystem. ``run_fn`` is
+    injected for testability and defaults to :func:`_default_verify_run`.
+
+    Any failure from ``run_fn`` (including an injected one that raises) is
+    captured in the returned JSON-serializable dict rather than propagated.
+    The result always carries a top-level ``ok`` boolean and a ``warnings``
+    list.
+    """
+
+    def _safe_run(argv: Sequence[str]) -> dict:
+        try:
+            return run_fn(argv)
+        except Exception as exc:  # noqa: BLE001 - capture, never raise
+            return {
+                "ok": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": "",
+                "error": str(exc),
+            }
+
+    version_res = _safe_run(["hermes", "--version"])
+    status_res = _safe_run(["hermes", "memory", "status"])
+
+    hermes_cli_callable = bool(version_res.get("ok"))
+    memory_status_ok = bool(status_res.get("ok"))
+    memory_provider = (
+        _detect_memory_provider(status_res.get("stdout", ""))
+        if memory_status_ok
+        else None
+    )
+    provider_is_mempalace = memory_provider == "mempalace"
+
+    skill_exists = SKILL_PATH.is_file()
+    engine_ok = _module_importable("mempalace_dreaming.engine")
+    setup_ok = _module_importable("mempalace_dreaming.setup")
+
+    plan = build_setup_plan(hermes_home=hermes_home)
+    directories = [
+        {"path": path, "exists": Path(path).expanduser().exists()}
+        for path in plan["directories"]
+    ]
+    all_directories_exist = all(d["exists"] for d in directories)
+
+    warnings: list[str] = []
+    if not hermes_cli_callable:
+        detail = version_res.get("error") or (
+            f"exit {version_res.get('returncode')}"
+        )
+        warnings.append(f"hermes CLI is not callable: {detail}")
+    if not memory_status_ok:
+        detail = status_res.get("error") or (
+            f"exit {status_res.get('returncode')}"
+        )
+        warnings.append(f"'hermes memory status' failed: {detail}")
+    elif not provider_is_mempalace:
+        warnings.append(
+            "memory provider is not 'mempalace' "
+            f"(detected: {memory_provider!r})"
+        )
+    if not skill_exists:
+        warnings.append("bundled skill file is missing")
+    if not engine_ok:
+        warnings.append("mempalace_dreaming.engine is not available")
+    if not setup_ok:
+        warnings.append("mempalace_dreaming.setup is not available")
+    if not all_directories_exist:
+        missing = [d["path"] for d in directories if not d["exists"]]
+        warnings.append(
+            "expected mempalace directories are missing: "
+            + ", ".join(missing)
+        )
+
+    ok = (
+        hermes_cli_callable
+        and memory_status_ok
+        and provider_is_mempalace
+        and skill_exists
+        and engine_ok
+        and setup_ok
+        and all_directories_exist
+    )
+
+    return {
+        "plugin": PLUGIN_NAME,
+        "version": PLUGIN_VERSION,
+        "hermes_home": str(Path(hermes_home).expanduser()),
+        "checks": {
+            "hermes_cli_callable": hermes_cli_callable,
+            "memory_status_ok": memory_status_ok,
+            "memory_provider": memory_provider,
+            "provider_is_mempalace": provider_is_mempalace,
+            "bundled_skill_exists": skill_exists,
+            "engine_module_available": engine_ok,
+            "setup_module_available": setup_ok,
+            "directories": directories,
+            "all_directories_exist": all_directories_exist,
+        },
+        "commands": {
+            "hermes_version": {
+                "ok": bool(version_res.get("ok")),
+                "returncode": version_res.get("returncode"),
+                "error": version_res.get("error", ""),
+            },
+            "memory_status": {
+                "ok": bool(status_res.get("ok")),
+                "returncode": status_res.get("returncode"),
+                "error": status_res.get("error", ""),
+            },
+        },
+        "ok": ok,
+        "warnings": warnings,
+    }
+
+
 def _setup_cli_parser(parser) -> None:
     sub = parser.add_subparsers(dest="mempalace_dreaming_command")
     plan = sub.add_parser("setup-plan", help="Print a safe MemPalace Dreaming setup plan")
@@ -151,6 +352,15 @@ def _setup_cli_parser(parser) -> None:
         help="Print plugin status and safety flags as JSON (read-only)",
     )
     status.set_defaults(func=_handle_cli)
+
+    verify = sub.add_parser(
+        "verify-runtime",
+        help="Read-only live environment check, JSON only (no side effects)",
+    )
+    verify.add_argument(
+        "--hermes-home", default="~/.hermes", help="Hermes home directory"
+    )
+    verify.set_defaults(func=_handle_cli)
 
     schedule_plan = sub.add_parser(
         "schedule-plan",
@@ -225,6 +435,12 @@ def _handle_cli(args) -> None:
     cmd = getattr(args, "mempalace_dreaming_command", None)
     if cmd == "status":
         print(json.dumps(_build_status(), indent=2, ensure_ascii=False))
+        return
+    if cmd == "verify-runtime":
+        verification = build_runtime_verification(
+            hermes_home=getattr(args, "hermes_home", "~/.hermes")
+        )
+        print(json.dumps(verification, indent=2, ensure_ascii=False))
         return
     if cmd == "schedule-plan":
         plan = build_schedule_plan(time=getattr(args, "time", "05:30"))

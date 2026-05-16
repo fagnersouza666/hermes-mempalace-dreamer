@@ -28,6 +28,7 @@ Partes já implementadas:
   - `hermes mempalace-dreaming setup-plan` (sempre somente relatório)
   - `hermes mempalace-dreaming setup` (dry-run por padrão, `--apply` opcional)
   - `hermes mempalace-dreaming status` (JSON somente leitura: versão, módulos, flags de segurança)
+  - `hermes mempalace-dreaming verify-runtime` (verificação ao vivo somente leitura do ambiente; sem efeitos colaterais)
   - `hermes mempalace-dreaming schedule-plan` (JSON somente relatório; nunca cria cron)
 - Fornece um planejador de setup em modo dry-run:
   - `build_setup_plan(...)`
@@ -113,9 +114,12 @@ explícito e opcional, `status` somente leitura, `schedule-plan` somente
 relatório e uma engine de dreaming pura estão todos implementados e testados.
 Utilizável como base de design/teste.
 
-**Ainda não pronto para produção.** Instalação de provider, agendamento cron
-real e verificação contra uma instalação Hermes ativa permanecem como
-trabalho futuro.
+Uma verificação ao vivo e somente leitura, `verify-runtime`, já está
+disponível — ela inspeciona uma instalação Hermes real, mas nunca corrige,
+instala ou agenda nada.
+
+**Ainda não pronto para produção.** Instalação de provider e agendamento
+cron real permanecem como trabalho futuro.
 
 Veja [`docs/USAGE.md`](docs/USAGE.md) para comandos e modelo de segurança,
 [`CHANGELOG.md`](CHANGELOG.md) para a entrada v0.1.0, e

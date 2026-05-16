@@ -15,6 +15,9 @@ Already implemented:
   - `hermes mempalace-dreaming setup-plan` (always report-only);
   - `hermes mempalace-dreaming setup` (dry-run by default, explicit `--apply`);
   - `hermes mempalace-dreaming status` (read-only JSON; no memory calls);
+  - `hermes mempalace-dreaming verify-runtime` (live read-only environment
+    check; runs `hermes --version` / `hermes memory status` captured, detects
+    the memory provider, checks bundled skill/modules/dirs; mutates nothing);
   - `hermes mempalace-dreaming schedule-plan` (report-only JSON; no cron).
 - Pure engine reporting/audit surface:
   - `render_report(report)` — deterministic markdown summary;
@@ -60,6 +63,11 @@ Acceptance criteria:
 - `hermes memory status` reports `provider: mempalace`.
 - Plugin can detect whether MemPalace tools are available.
 - Unknown backend remains report-only, not built-in fallback.
+
+Partially addressed: `verify-runtime` already parses `hermes memory status`
+read-only and reports whether the provider looks like `mempalace` (warning,
+never a fallback or mutation). It does not yet install or configure a
+provider — that is still future work below.
 
 ## 2. Dreaming engine
 

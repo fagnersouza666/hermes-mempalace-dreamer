@@ -18,6 +18,25 @@ Prints plugin name/version/status, whether the bundled skill and engine/setup
 modules are present, and the safety flags. Makes no memory calls and mutates
 nothing.
 
+### `verify-runtime` — live, read-only
+
+```bash
+hermes mempalace-dreaming verify-runtime --hermes-home ~/.hermes
+```
+
+Probes the live environment and prints a JSON report. It is strictly
+read-only: it runs `hermes --version` and `hermes memory status` (captured,
+never raising), checks whether the memory provider looks like `mempalace`,
+whether the bundled skill and `mempalace_dreaming.engine`/`.setup` modules
+are present, and whether the expected `mempalace` directories for the chosen
+`--hermes-home` exist. It mutates nothing — no config, memory, cron, or
+files — and does **not** install a provider or create directories. The
+payload always carries a top-level `ok` boolean and a `warnings` list; a
+failed subprocess becomes a warning, not a crash. Command stdout is not
+echoed into the JSON, to avoid leaking environment details.
+
+This is the live counterpart to `status`, which stays purely local/static.
+
 ### `setup-plan` — report-only
 
 ```bash
@@ -73,5 +92,7 @@ are dependency-injected (`search_fn` / `remember_fn`).
 
 ## Not production-ready
 
-Provider installation, real cron scheduling, and verification against a live
-Hermes install remain future work. See [`../ROADMAP.md`](../ROADMAP.md).
+`verify-runtime` adds a read-only check against a live Hermes install, but it
+only *reports* — it never fixes, installs, or schedules anything. Provider
+installation and real cron scheduling remain future work, and this is still
+not a production-ready system. See [`../ROADMAP.md`](../ROADMAP.md).

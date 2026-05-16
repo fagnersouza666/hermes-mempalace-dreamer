@@ -27,6 +27,7 @@ Current implemented pieces:
   - `hermes mempalace-dreaming setup-plan` (always report-only)
   - `hermes mempalace-dreaming setup` (dry-run by default, `--apply` opt-in)
   - `hermes mempalace-dreaming status` (read-only JSON: version, modules, safety flags)
+  - `hermes mempalace-dreaming verify-runtime` (live read-only environment check; no side effects)
   - `hermes mempalace-dreaming schedule-plan` (report-only JSON; never creates cron)
 - Provides a dry-run setup planner:
   - `build_setup_plan(...)`
@@ -114,8 +115,11 @@ python3 -m pytest tests -q
 read-only `status`, report-only `schedule-plan`, and a pure dreaming engine
 are all implemented and tested. Usable as a design/test base.
 
-**Not production-ready.** Provider installation, real cron scheduling, and
-verification against a live Hermes install remain future work.
+A live, read-only `verify-runtime` check is now available — it reports on a
+real Hermes install but never fixes, installs, or schedules anything.
+
+**Not production-ready.** Provider installation and real cron scheduling
+remain future work.
 
 See [`docs/USAGE.md`](docs/USAGE.md) for commands and the safety model,
 [`CHANGELOG.md`](CHANGELOG.md) for the v0.1.0 entry, and
