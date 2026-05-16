@@ -157,6 +157,34 @@ def test_parse_cron_jobs_json_array():
 
 
 # ---------------------------------------------------------------------------
+# Helpers: _parse_cron_blocks
+# ---------------------------------------------------------------------------
+
+INDENTED_CRON_BLOCK_OUTPUT = """\
+  86ebf7425e3c [active]
+    Name:      mempalace-dreaming-daily
+    Schedule:  30 08 * * *
+    Repeat:    daily
+"""
+
+
+def test_parse_cron_blocks_indented_header():
+    """Real ``hermes cron list`` indents the job id under the header line.
+
+    Regression: ``_CRON_BLOCK_HEADER_RE`` must tolerate leading whitespace
+    before the job id, otherwise the whole block is skipped and doctor
+    wrongly reports the daily job as absent.
+    """
+    module = load_plugin()
+    jobs = module._parse_cron_blocks(INDENTED_CRON_BLOCK_OUTPUT)
+    assert isinstance(jobs, list)
+    names = [j["name"] for j in jobs]
+    assert "mempalace-dreaming-daily" in names
+    dreaming = next(j for j in jobs if j["name"] == "mempalace-dreaming-daily")
+    assert dreaming["schedule"] == "30 08 * * *"
+
+
+# ---------------------------------------------------------------------------
 # build_doctor_report — success path (all green)
 # ---------------------------------------------------------------------------
 
@@ -592,16 +620,27 @@ def test_doctor_cli_default_args():
     assert args.timezone is None
 
 
-def test_doctor_cli_graceful_no_hermes_binary(capsys, tmp_path):
-    """Default run_fn: no hermes binary -> ok False, valid JSON, no exception."""
+def test_doctor_cli_graceful_runtime_runner_failure(capsys, tmp_path, monkeypatch):
+    """Default run_fn fails -> ok False, valid JSON, no exception.
+
+    Deterministic and environment-independent: instead of relying on
+    ``hermes`` being absent from PATH (it may well exist on the runner),
+    force every subprocess invocation to fail. The CLI must still print
+    valid JSON, report ``ok`` False, and never raise.
+    """
     module = load_plugin()
+
+    def _boom(*_a, **_k):
+        raise FileNotFoundError("hermes")
+
+    monkeypatch.setattr(module.subprocess, "run", _boom)
+
     args = _parse(module, ["doctor", "--hermes-home", str(tmp_path)])
-    # This calls the real default run_fn; hermes is absent so it will fail
     args.func(args)
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert isinstance(payload["ok"], bool)
-    assert payload["ok"] is False  # hermes not callable
+    assert payload["ok"] is False  # runtime runner failed
     json.dumps(payload)
 
 
