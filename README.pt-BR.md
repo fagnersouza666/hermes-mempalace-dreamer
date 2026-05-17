@@ -14,10 +14,10 @@ opcional, verificação pós-apply explícita e opcional, `status` e
 `verify-runtime` somente leitura) e uma engine de dreaming pura, sem
 dependências. Agora consegue bootstrapar o provider real do MemPalace de modo
 explícito via `setup --apply --install-provider`: copia o plugin provider
-empacotado para `$HERMES_HOME/plugins/mempalace/` e roda `uv tool install
---upgrade mempalace` como argv. Nunca escreve no Obsidian e nunca grava
-memória durante setup ou verificação. Todo efeito colateral é explícito e
-injetado por dependência.
+empacotado para `$HERMES_HOME/plugins/mempalace/` e instala `mempalace` por
+uma estratégia explícita em argv (`--install-method auto|uv|pipx|pip-user`).
+Nunca escreve no Obsidian e nunca grava memória durante setup ou verificação.
+Todo efeito colateral é explícito e testado de forma isolada.
 
 Sua função é fazer a consolidação de memória do Hermes usar o MemPalace como camada principal de memória semântica, em vez de inflar os arquivos internos `MEMORY.md` / `USER.md`.
 
@@ -52,11 +52,12 @@ Partes já implementadas:
   - comandos de config e de cron são listas argv, executadas via
     `subprocess` sem shell;
   - o bootstrap do provider é **explícito e opcional** (`--apply --install-provider`):
-    o plano expõe os arquivos empacotados do provider e o argv exato da
+    o plano expõe os arquivos empacotados do provider e os candidatos de
     instalação do CLI; no apply, copia o provider para
-    `$HERMES_HOME/plugins/mempalace/`, roda `uv tool install --upgrade
-    mempalace`, reporta o resultado em JSON e pula cron/verificação se o
-    bootstrap do provider falhar;
+    `$HERMES_HOME/plugins/mempalace/`, instala `mempalace` por
+    `--install-method auto|uv|pipx|pip-user` (`auto` tenta uv → pipx →
+    pip-user, nesta ordem fixa), reporta todas as tentativas no JSON e pula
+    cron/verificação se todas falharem;
   - a criação de cron é **explícita e opcional** (`--apply --create-cron`):
     argv determinístico de `hermes cron create`, nome de job fixo, prompt
     conservador autocontido, skill empacotada anexada, `--deliver local`
@@ -103,10 +104,10 @@ mesmo JSON dry-run; com a flag explícita `--apply` ele cria os diretórios
 planejados e executa os comandos `hermes config set ...`. Adicionar
 `--install-provider` expõe o plano de bootstrap do provider; com
 `--apply --install-provider`, o plugin copia o bundle do provider para
-`$HERMES_HOME/plugins/mempalace/` e roda `uv tool install --upgrade
-mempalace`. Adicionar `--create-cron` (somente com `--apply`) cria o cron
-diário de dreaming via `schedule_fn` injetado, usando a expressão cron **em
-UTC** convertida a partir de `--time`/`--timezone`; adicionar
+`$HERMES_HOME/plugins/mempalace/` e instala `mempalace` por `--install-method`
+(padrão `auto`: uv → pipx → pip-user). Adicionar `--create-cron` (somente com
+`--apply`) cria o cron diário de dreaming via `schedule_fn` injetado, usando
+a expressão cron **em UTC** convertida a partir de `--time`/`--timezone`; adicionar
 `--verify-after-apply` roda a checagem somente leitura depois. Adicionar
 `--schedule-lean-check --create-lean-check-cron` cria um cron semanal distinto
 de lean-check com prompt somente leitura contra o provider vivo. Se uma ação
@@ -182,10 +183,11 @@ integração contra um Hermes Home isolado.
 
 **Escopo de “pronto para produção”:** esta é uma camada de bootstrap e
 orquestração pronta para produção. Agora inclui bootstrap explícito do
-provider MemPalace para perfis Hermes, mas ainda depende de o ambiente
-conseguir executar `uv tool install --upgrade mempalace`. Comportamento em
-instalação fresca, recarga de gateway e ambientes sem `uv` continuam sendo
-itens de validação por ambiente.
+provider MemPalace para perfis Hermes com estratégia non-`uv`-only
+(`auto|uv|pipx|pip-user`), mas ainda depende de o ambiente real conseguir
+executar pelo menos um desses caminhos. Comportamento em instalação fresca,
+recarga de gateway e backend vivo continuam sendo itens de validação por
+ambiente.
 
 O agendamento agora é **ciente de timezone**: o cron criado usa a conversão
 UTC de `--time`/`--timezone`. O timezone padrão é **UTC**; para horário local,
