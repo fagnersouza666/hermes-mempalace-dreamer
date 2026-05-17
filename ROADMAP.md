@@ -104,9 +104,19 @@ returning a `DreamReport`), `render_report()` (deterministic markdown) and
 `search_fn`/`remember_fn` are injected; no Hermes tools are imported.
 Covered by `tests/test_engine.py`.
 
-Future engine work (post-v0.1): deeper REM-style integration (contradiction
-resolution, supersede detection, semantic clustering) wired to a live
-MemPalace provider.
+**REM-style report-only integration: done.**
+`build_integration_report(memories)` adds a pure, deterministic, side-effect
+free analysis exposed via the `integration-report` CLI command: it reports
+`contradictions` (opposing polarity / antonym pairs on a shared topic),
+`supersede_candidates` (recency/override marker on one of two same-topic
+memories) and `clusters` (identical deterministic topic key, size ≥ 2).
+Secret-like / temporary entries are excluded and never echoed. It only
+*reports*: it never reads, writes, deletes, or supersedes memory. Covered by
+`tests/test_integration_report.py`.
+
+Still external by design: wiring the integration analysis to a **live**
+MemPalace provider corpus (vs. supplied input) — the conservative resolution
+of contradictions/supersedes stays manual and report-first, never automatic.
 
 Rules:
 
@@ -164,19 +174,39 @@ contract through an injected `schedule_fn`, `--deliver local`, conservative
 prompt, bundled skill attached. Rollback guidance points at
 `hermes cron list` + remove-by-job-id.
 
+**Weekly live-provider lean-check cron: done.** `setup
+--schedule-lean-check` adds a report-only weekly schedule block;
+`setup --apply --create-lean-check-cron` creates a deterministic, **distinct**
+named weekly job (`mempalace-dreaming-weekly-lean-check`) via the same real
+`hermes cron create` contract and injected `schedule_fn`, `--deliver local`.
+Its prompt explicitly queries the **live** MemPalace backend read-only and is
+strictly report-only: it never deletes, compacts, rewrites, or persists
+memory and proposes cleanup only for explicit human approval. `--time` /
+`--lean-check-weekday` / `--timezone` are converted to a weekly UTC cron
+(day-of-week shifted if the conversion crosses midnight). Same early-failure
+gating as the daily cron. Covered by `tests/test_weekly_lean_check.py`.
+
 Still future work:
 
-- weekly lean-check report wired to a live provider (not local input);
-- manual cleanup only after user approval.
+- the weekly cron *prompt* targets a live provider, but executing it against
+  a real MemPalace backend is a runtime/deployment concern, not repo code;
+- manual cleanup only after user approval (unchanged: never automated).
 
 ## 5. CI and packaging
 
-Add GitHub Actions:
+**Done.** `.github/workflows/test.yml` runs on push/PR with a 3.11 + 3.12
+matrix and now has explicit, ordered validation steps before the suite:
 
-- run tests on Python 3.11 and 3.12;
-- validate `plugin.yaml`;
-- validate skill frontmatter;
-- run a minimal import test.
+- `Validate plugin.yaml` — name/version/`hooks == []`;
+- `Validate skill frontmatter` — name/version of `SKILL.md`;
+- `Import smoke` — imports `mempalace_dreaming.engine` / `.setup` and asserts
+  the new public surface (`build_integration_report`,
+  `build_lean_check_cron_argv`, `LEAN_CHECK_JOB_NAME`);
+- `Run tests` — `python -m pytest tests -q`.
+
+These mirror `tests/test_packaging.py` (kept) and are asserted by
+`tests/test_ci_workflow.py`. Deliberately minimal — no release pipeline,
+no PyPI publish.
 
 Packaging goals:
 

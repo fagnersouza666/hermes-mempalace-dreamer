@@ -32,6 +32,25 @@ ProviderInstallFn = Callable[[Sequence[str]], object]
 #: Deterministic cron job name so re-runs target the same schedule.
 SCHEDULE_JOB_NAME = "mempalace-dreaming-daily"
 
+#: Deterministic name for the weekly, live-provider lean-check cron. Distinct
+#: from the daily dreaming job so the two never collide on re-apply.
+LEAN_CHECK_JOB_NAME = "mempalace-dreaming-weekly-lean-check"
+
+#: Conservative prompt for the weekly lean-check cron. Unlike the daily
+#: dreaming pass it explicitly queries the *live* MemPalace backend, but it
+#: stays strictly report-only: it must never delete, compact, rewrite, or
+#: persist memory, and never touch cron/config/Obsidian. Safe to bake
+#: verbatim into a cron job: no secrets, no environment specifics.
+CONSERVATIVE_LEAN_CHECK_PROMPT = (
+    "Run a weekly MemPalace lean-check. Query the live MemPalace backend "
+    "read-only (mempalace_status / mempalace_search) and audit memory "
+    "quality: duplicate or near-duplicate clusters, stale temporary state, "
+    "overly broad memories, contradictions, and supersede candidates. "
+    "Return a short report only. Do NOT delete, compact, rewrite, or persist "
+    "any memory. Do not write to Obsidian. Do not change cron or config. "
+    "Any cleanup must be proposed for explicit human approval, never applied."
+)
+
 #: Conservative, self-contained prompt for the daily dreaming cron. It is
 #: intentionally generic: no secrets, no environment specifics, no chat
 #: targeting. It must stay safe to bake verbatim into a cron job.
@@ -54,6 +73,8 @@ class SetupResult:
     config_commands: list[list[str]] = field(default_factory=list)
     schedule_planned: dict[str, Any] | None = None
     cron: dict[str, Any] | None = None
+    lean_check_schedule_planned: dict[str, Any] | None = None
+    lean_check_cron: dict[str, Any] | None = None
     verification: dict[str, Any] | None = None
     provider_install_planned: dict[str, Any] | None = None
     provider: dict[str, Any] | None = None
@@ -144,11 +165,43 @@ def build_cron_create_argv(
     ]
 
 
+def build_lean_check_cron_argv(
+    schedule: dict[str, Any], *, deliver: str = "local"
+) -> list[str]:
+    """Build the exact ``hermes cron create`` argv for the weekly lean-check.
+
+    Same real-CLI contract as :func:`build_cron_create_argv` (positional
+    ``schedule`` + ``prompt``, no invented flags), but with the fixed weekly
+    job name :data:`LEAN_CHECK_JOB_NAME` and the report-only
+    :data:`CONSERVATIVE_LEAN_CHECK_PROMPT`. The cron expression is the
+    weekly ``cron_utc`` (``"MM HH * * D"``) computed at plan time; there is
+    no HH:MM fallback because a weekly schedule needs the day-of-week field.
+    Deterministic and argv-only (never a shell string). ``deliver`` defaults
+    to the safe ``"local"`` sink.
+    """
+    cron_expr = schedule["cron_utc"]
+    skill = schedule.get("skill", "mempalace-dreaming:mempalace-dreaming")
+    return [
+        "hermes",
+        "cron",
+        "create",
+        "--name",
+        LEAN_CHECK_JOB_NAME,
+        "--deliver",
+        deliver,
+        "--skill",
+        skill,
+        cron_expr,
+        CONSERVATIVE_LEAN_CHECK_PROMPT,
+    ]
+
+
 def _build_rollback_notes(
     directories: list[str],
     commands: list[list[str]],
     create_cron: bool,
     install_provider: bool = False,
+    create_lean_check_cron: bool = False,
 ) -> list[str]:
     notes = [
         "Setup makes no destructive changes; rollback is manual and explicit.",
@@ -175,6 +228,18 @@ def _build_rollback_notes(
         notes.append(
             "No cron job is created by setup; nothing to undo for scheduling."
         )
+    if create_lean_check_cron:
+        notes.append(
+            "A weekly lean-check cron may be created with name "
+            f"'{LEAN_CHECK_JOB_NAME}'. To undo: run 'hermes cron list' to "
+            "find its job id, then 'hermes cron remove <job_id>' (removal is "
+            "by job id, not by name)."
+        )
+    else:
+        notes.append(
+            "No weekly lean-check cron is created by setup; nothing to undo "
+            "for the lean-check schedule."
+        )
     if install_provider:
         notes.append(
             "Provider bootstrap copies files into "
@@ -198,6 +263,8 @@ def apply_setup_plan(
     apply: bool = False,
     schedule_fn: ScheduleFn | None = None,
     create_cron: bool = False,
+    lean_check_schedule_fn: ScheduleFn | None = None,
+    create_lean_check_cron: bool = False,
     verify_fn: VerifyFn | None = None,
     verify_after_apply: bool = False,
     provider_copy_fn: ProviderCopyFn | None = None,
@@ -229,6 +296,14 @@ def apply_setup_plan(
     not requested, ``result.cron`` stays ``None`` and scheduling remains
     report-only via ``schedule_planned``.
 
+    The weekly lean-check cron is created **only** when ``apply=True`` *and*
+    ``create_lean_check_cron=True``, the plan carries a
+    ``lean_check_schedule``, and ``lean_check_schedule_fn`` is injected. It
+    uses the same early-failure gating as the daily cron and a separate
+    deterministic job name; its outcome is captured in
+    ``result.lean_check_cron`` (never raised). Otherwise it stays
+    report-only via ``lean_check_schedule_planned``.
+
     Post-apply verification happens **only** when ``apply=True`` *and*
     ``verify_after_apply=True``. It is skipped (recorded as ``ran=False``
     with a reason) if apply failed early, so verification never runs against
@@ -251,9 +326,14 @@ def apply_setup_plan(
     planned_directories = list(plan.get("directories", []))
     planned_commands = build_config_commands(plan)
     schedule_planned = plan.get("schedule")
+    lean_check_schedule_planned = plan.get("lean_check_schedule")
     provider_install_planned = plan.get("provider_install")
     rollback_notes = _build_rollback_notes(
-        planned_directories, planned_commands, create_cron, install_provider
+        planned_directories,
+        planned_commands,
+        create_cron,
+        install_provider,
+        create_lean_check_cron,
     )
 
     if not apply:
@@ -263,6 +343,8 @@ def apply_setup_plan(
             config_commands=planned_commands,
             schedule_planned=schedule_planned,
             cron=None,
+            lean_check_schedule_planned=lean_check_schedule_planned,
+            lean_check_cron=None,
             verification=None,
             provider_install_planned=provider_install_planned,
             provider=None,
@@ -313,6 +395,13 @@ def apply_setup_plan(
         apply_failed_early=failed_early,
     )
 
+    lean_check_cron = _maybe_create_lean_check_cron(
+        lean_check_schedule_planned,
+        schedule_fn=lean_check_schedule_fn,
+        create_lean_check_cron=create_lean_check_cron,
+        apply_failed_early=failed_early,
+    )
+
     verification = _maybe_verify(
         verify_fn=verify_fn,
         verify_after_apply=verify_after_apply,
@@ -325,6 +414,8 @@ def apply_setup_plan(
         config_commands=config_commands,
         schedule_planned=schedule_planned,
         cron=cron,
+        lean_check_schedule_planned=lean_check_schedule_planned,
+        lean_check_cron=lean_check_cron,
         verification=verification,
         provider_install_planned=provider_install_planned,
         provider=provider,
@@ -459,6 +550,65 @@ def _maybe_create_cron(
             "created": False,
             "argv": argv,
             "error": f"cron creation failed: {exc}",
+        }
+    return {"requested": True, "created": True, "argv": argv, "error": ""}
+
+
+def _maybe_create_lean_check_cron(
+    schedule_planned: dict[str, Any] | None,
+    *,
+    schedule_fn: ScheduleFn | None,
+    create_lean_check_cron: bool,
+    apply_failed_early: bool,
+) -> dict[str, Any] | None:
+    """Create the weekly lean-check cron, or explain why it was not.
+
+    Mirrors :func:`_maybe_create_cron` exactly (same safety gating, same
+    JSON shape) but for the weekly, live-provider, report-only lean-check
+    job. Returns ``None`` when not requested. Never raises.
+    """
+    if not create_lean_check_cron:
+        return None
+    if apply_failed_early:
+        return {
+            "requested": True,
+            "created": False,
+            "argv": None,
+            "error": "skipped: apply failed early; lean-check cron not created",
+        }
+    if not schedule_planned:
+        return {
+            "requested": True,
+            "created": False,
+            "argv": None,
+            "error": "no lean_check_schedule in plan; pass --schedule-lean-check",
+        }
+    if schedule_fn is None:
+        return {
+            "requested": True,
+            "created": False,
+            "argv": None,
+            "error": "no lean_check_schedule_fn injected; cannot create cron",
+        }
+    if not schedule_planned.get("cron_utc"):
+        reason = schedule_planned.get(
+            "timezone_error", "no UTC cron in lean-check schedule"
+        )
+        return {
+            "requested": True,
+            "created": False,
+            "argv": None,
+            "error": f"lean-check cron not created: {reason}",
+        }
+    argv = build_lean_check_cron_argv(schedule_planned)
+    try:
+        schedule_fn(argv)
+    except Exception as exc:  # noqa: BLE001 - report, never crash apply
+        return {
+            "requested": True,
+            "created": False,
+            "argv": argv,
+            "error": f"lean-check cron creation failed: {exc}",
         }
     return {"requested": True, "created": True, "argv": argv, "error": ""}
 
