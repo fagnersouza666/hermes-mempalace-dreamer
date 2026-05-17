@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -31,6 +32,24 @@ DEFAULT_TIMEZONE = "UTC"
 #: keeps conversion deterministic (independent of "today") and the caveat is
 #: documented in the plan output and the READMEs.
 _CRON_REFERENCE_DATE = (2025, 1, 15)
+
+
+def _default_hermes_home() -> str:
+    """Return the active Hermes home, honoring ``$HERMES_HOME`` when present.
+
+    Runtime validation exposed a real-host mismatch: hardcoding ``~/.hermes``
+    makes CLI commands ignore an isolated/fresh ``HERMES_HOME`` even though the
+    host Hermes runtime itself respects that environment variable. Prefer the
+    host helper when available; otherwise fall back to the env var and finally
+    to the conventional default path.
+    """
+
+    try:
+        from hermes_constants import get_hermes_home
+
+        return str(get_hermes_home())
+    except Exception:  # noqa: BLE001 - keep plugin importable outside Hermes
+        return os.environ.get("HERMES_HOME", "~/.hermes")
 
 
 def _format_utc_offset(offset) -> str:
@@ -495,7 +514,7 @@ def _detect_memory_provider(stdout: str) -> str | None:
 
 
 def build_runtime_verification(
-    hermes_home: str | Path = "~/.hermes",
+    hermes_home: str | Path | None = None,
     *,
     run_fn: VerifyRunFn = _default_verify_run,
 ) -> dict[str, Any]:
@@ -511,6 +530,8 @@ def build_runtime_verification(
     The result always carries a top-level ``ok`` boolean and a ``warnings``
     list.
     """
+
+    hermes_home = hermes_home or _default_hermes_home()
 
     def _safe_run(argv: Sequence[str]) -> dict:
         try:
@@ -621,7 +642,7 @@ def build_runtime_verification(
 def _setup_cli_parser(parser) -> None:
     sub = parser.add_subparsers(dest="mempalace_dreaming_command")
     plan = sub.add_parser("setup-plan", help="Print a safe MemPalace Dreaming setup plan")
-    plan.add_argument("--hermes-home", default="~/.hermes", help="Hermes home directory")
+    plan.add_argument("--hermes-home", default=_default_hermes_home(), help="Hermes home directory")
     plan.add_argument("--schedule-dreaming", action="store_true", help="Include optional dreaming cron plan")
     plan.add_argument("--time", default="05:30", help="Wall-clock time (HH:MM) for the optional dreaming cron, interpreted in --timezone")
     plan.add_argument("--timezone", default=DEFAULT_TIMEZONE, help=f"IANA timezone for --time (default: {DEFAULT_TIMEZONE}; the cron is converted to UTC)")
@@ -662,7 +683,7 @@ def _setup_cli_parser(parser) -> None:
         "setup",
         help="Dry-run (default) or --apply the MemPalace Dreaming setup",
     )
-    setup.add_argument("--hermes-home", default="~/.hermes", help="Hermes home directory")
+    setup.add_argument("--hermes-home", default=_default_hermes_home(), help="Hermes home directory")
     setup.add_argument("--schedule-dreaming", action="store_true", help="Include optional dreaming cron plan (report-only)")
     setup.add_argument("--time", default="05:30", help="Wall-clock time (HH:MM) for the optional dreaming cron, interpreted in --timezone")
     setup.add_argument("--timezone", default=DEFAULT_TIMEZONE, help=f"IANA timezone for --time (default: {DEFAULT_TIMEZONE}; the cron is converted to UTC)")
@@ -747,7 +768,7 @@ def _setup_cli_parser(parser) -> None:
         help="Read-only live environment check, JSON only (no side effects)",
     )
     verify.add_argument(
-        "--hermes-home", default="~/.hermes", help="Hermes home directory"
+        "--hermes-home", default=_default_hermes_home(), help="Hermes home directory"
     )
     verify.set_defaults(func=_handle_cli)
 
@@ -768,7 +789,7 @@ def _setup_cli_parser(parser) -> None:
         help="Read-only operational audit: plugin/memory/config/cron (no side effects)",
     )
     doctor.add_argument(
-        "--hermes-home", default="~/.hermes", help="Hermes home directory"
+        "--hermes-home", default=_default_hermes_home(), help="Hermes home directory"
     )
     doctor.add_argument(
         "--expected-time",
@@ -787,7 +808,7 @@ def _setup_cli_parser(parser) -> None:
         help="Report-only repair plan derived from doctor findings (no fixes applied)",
     )
     repair_plan.add_argument(
-        "--hermes-home", default="~/.hermes", help="Hermes home directory"
+        "--hermes-home", default=_default_hermes_home(), help="Hermes home directory"
     )
     repair_plan.add_argument(
         "--expected-time",
@@ -1042,7 +1063,7 @@ def _cron_fields_match(a: str, b: str) -> bool:
 
 
 def build_doctor_report(
-    hermes_home: str | Path = "~/.hermes",
+    hermes_home: str | Path | None = None,
     *,
     run_fn: VerifyRunFn = _default_verify_run,
     expected_time: str | None = None,
@@ -1064,6 +1085,7 @@ def build_doctor_report(
             (schedule_mismatch stays None). Omitting ``expected_time`` entirely
             also keeps schedule_mismatch None.
     """
+    hermes_home = hermes_home or _default_hermes_home()
     schedule_job_name = _load_schedule_job_name()
 
     home = Path(hermes_home).expanduser()
@@ -1347,7 +1369,7 @@ def _config_expected_literal(expected_desc: str) -> str:
 
 
 def build_repair_plan(
-    hermes_home: str | Path = "~/.hermes",
+    hermes_home: str | Path | None = None,
     *,
     run_fn: VerifyRunFn = _default_verify_run,
     expected_time: str | None = None,
@@ -1362,8 +1384,10 @@ def build_repair_plan(
     action taken here. Never raises: any failure is captured into the
     JSON-serializable result via the underlying doctor report.
     """
+    hermes_home = hermes_home or _default_hermes_home()
+
     doctor = build_doctor_report(
-        hermes_home,
+        hermes_home=hermes_home,
         run_fn=run_fn,
         expected_time=expected_time,
         timezone=timezone,

@@ -615,7 +615,7 @@ def test_doctor_cli_prints_valid_json(capsys, tmp_path):
 def test_doctor_cli_default_args():
     module = load_plugin()
     args = _parse(module, ["doctor"])
-    assert args.hermes_home == "~/.hermes"
+    assert args.hermes_home == module._default_hermes_home()
     assert args.expected_time is None
     assert args.timezone is None
 

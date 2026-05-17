@@ -207,4 +207,5 @@ def test_verify_runtime_cli_prints_json_and_mutates_nothing(capsys, tmp_path):
 def test_verify_runtime_defaults_hermes_home():
     module = load_plugin()
     args = _parse(module, ["verify-runtime"])
-    assert args.hermes_home == "~/.hermes"
+    assert args.hermes_home == module._default_hermes_home()
+    assert hasattr(args, "func")
