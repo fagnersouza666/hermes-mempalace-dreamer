@@ -9,6 +9,10 @@ follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 ### Added
 
 - add installation doctor command (read-only operational audit: plugin/memory/config/cron, duplicate & timezone drift detection).
+- add `repair-plan` command: report-only, JSON-only translation of doctor
+  findings into a priority-ordered `repairs` list (id/priority/kind/reason/
+  suggested_action/command_preview). Applies nothing — every command is a
+  preview, never executed; never invents a cron job id.
 
 ### Fixed
 

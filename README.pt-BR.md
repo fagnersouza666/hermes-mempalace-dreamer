@@ -36,6 +36,7 @@ Partes já implementadas:
   - `hermes mempalace-dreaming schedule-plan` (JSON somente relatório; nunca cria cron)
   - `hermes mempalace-dreaming lean-check` (JSON somente relatório; classifica material candidato local, sem gravações)
   - `hermes mempalace-dreaming doctor` (auditoria operacional somente leitura: presença do plugin, provider de memória, coerência de configuração, estado do cron, detecção de duplicatas e desvio de timezone; nunca muta nada)
+  - `hermes mempalace-dreaming repair-plan` (somente relatório: transforma os achados do doctor em um plano de reparo explícito e ordenado por prioridade, com prévias de comando; nunca aplica nenhuma correção)
 - Fornece um planejador de setup em modo dry-run:
   - `build_setup_plan(...)`
 - Fornece uma camada de aplicação explícita:

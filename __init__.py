@@ -506,6 +506,25 @@ def _setup_cli_parser(parser) -> None:
     )
     doctor.set_defaults(func=_handle_cli)
 
+    repair_plan = sub.add_parser(
+        "repair-plan",
+        help="Report-only repair plan derived from doctor findings (no fixes applied)",
+    )
+    repair_plan.add_argument(
+        "--hermes-home", default="~/.hermes", help="Hermes home directory"
+    )
+    repair_plan.add_argument(
+        "--expected-time",
+        default=None,
+        help="Expected wall-clock time (HH:MM) to compare against the live cron schedule",
+    )
+    repair_plan.add_argument(
+        "--timezone",
+        default=None,
+        help="IANA timezone for --expected-time conversion (omit to skip schedule comparison)",
+    )
+    repair_plan.set_defaults(func=_handle_cli)
+
     lean_check = sub.add_parser(
         "lean-check",
         help="Report-only lean-check of candidate memory material (no writes)",
@@ -1016,6 +1035,236 @@ def build_doctor_report(
     }
 
 
+_REPAIR_PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
+
+
+def _config_expected_literal(expected_desc: str) -> str:
+    """Turn a doctor ``expected`` description into a config-set literal.
+
+    doctor stores expectations as human strings (``truthy``,
+    ``"mempalace"``, ``"plugin:mempalace-dreaming"``). This derives the
+    value to show in a ``hermes config set`` *preview* (never executed),
+    so repair-plan stays coherent with doctor without duplicating its map.
+    """
+    desc = (expected_desc or "").strip()
+    if desc == "truthy":
+        return "true"
+    if len(desc) >= 2 and desc[0] == '"' and desc[-1] == '"':
+        return desc[1:-1]
+    return desc
+
+
+def build_repair_plan(
+    hermes_home: str | Path = "~/.hermes",
+    *,
+    run_fn: VerifyRunFn = _default_verify_run,
+    expected_time: str | None = None,
+    timezone: str | None = None,
+) -> dict[str, Any]:
+    """Turn ``doctor`` findings into an explicit, report-only repair plan.
+
+    Reuses :func:`build_doctor_report` for detection, then maps each failed
+    check into an ordered ``repairs`` list. Strictly report-only: it never
+    writes config/cron/memory/files and never executes any command — every
+    ``command_preview`` is a string the operator may choose to run, not an
+    action taken here. Never raises: any failure is captured into the
+    JSON-serializable result via the underlying doctor report.
+    """
+    doctor = build_doctor_report(
+        hermes_home,
+        run_fn=run_fn,
+        expected_time=expected_time,
+        timezone=timezone,
+    )
+    checks = doctor.get("checks", {})
+    repairs: list[dict[str, Any]] = []
+
+    def add(
+        repair_id: str,
+        priority: str,
+        kind: str,
+        reason: str,
+        suggested_action: str,
+        command_preview: str | None = None,
+    ) -> None:
+        repairs.append(
+            {
+                "id": repair_id,
+                "priority": priority,
+                "kind": kind,
+                "reason": reason,
+                "suggested_action": suggested_action,
+                "command_preview": command_preview,
+            }
+        )
+
+    # --- Plugin presence -------------------------------------------------
+    if checks.get("bundled_skill_exists") is False:
+        add(
+            "restore-bundled-skill",
+            "high",
+            "plugin",
+            "the bundled skill file is missing from the plugin directory",
+            "re-clone or reinstall the plugin to restore the skill file",
+        )
+    if checks.get("engine_module_available") is False:
+        add(
+            "restore-engine-module",
+            "high",
+            "plugin",
+            "mempalace_dreaming.engine is not importable",
+            "ensure mempalace_dreaming/engine.py is present in the plugin directory",
+        )
+    if checks.get("setup_module_available") is False:
+        add(
+            "restore-setup-module",
+            "high",
+            "plugin",
+            "mempalace_dreaming.setup is not importable",
+            "ensure mempalace_dreaming/setup.py is present in the plugin directory",
+        )
+
+    # --- Environment / Hermes CLI ---------------------------------------
+    if checks.get("hermes_cli_callable") is False:
+        add(
+            "install-hermes-cli",
+            "high",
+            "environment",
+            "the 'hermes' CLI is not callable",
+            "verify the hermes installation and that it is on the PATH; "
+            "no automatic fix is attempted",
+        )
+    if checks.get("memory_status_ok") is False:
+        add(
+            "fix-memory-status",
+            "high",
+            "environment",
+            "'hermes memory status' did not succeed",
+            "inspect the hermes memory configuration manually; "
+            "no automatic fix is attempted",
+        )
+
+    # --- Memory provider (runtime) --------------------------------------
+    if (
+        checks.get("memory_status_ok") is True
+        and checks.get("provider_is_mempalace") is False
+    ):
+        detected = checks.get("memory_provider")
+        add(
+            "set-memory-provider",
+            "high",
+            "config",
+            f"the active memory provider is {detected!r}, not 'mempalace'",
+            "set the memory provider to mempalace, then restart the hermes runtime",
+            "hermes config set memory.provider mempalace",
+        )
+
+    # --- Config coherence -----------------------------------------------
+    config = checks.get("config", {})
+    config_error = config.get("config_error")
+    if config_error is not None:
+        add(
+            "fix-config-readability",
+            "high",
+            "config",
+            f"the hermes config could not be read: {config_error}",
+            "verify that `hermes config path` resolves to a readable YAML "
+            "file; no `hermes config set` is suggested until it is readable",
+            None,
+        )
+    else:
+        for key, entry in config.items():
+            if not isinstance(entry, dict) or "ok" not in entry:
+                continue
+            if entry.get("ok") is True:
+                continue
+            if key == "memory.provider" and any(
+                r["id"] == "set-memory-provider" for r in repairs
+            ):
+                # Already covered by the provider repair; avoid a duplicate
+                # `hermes config set memory.provider` preview.
+                continue
+            literal = _config_expected_literal(str(entry.get("expected", "")))
+            add(
+                f"set-config-{key}",
+                "high",
+                "config",
+                f"config key '{key}' is not coherent "
+                f"(expected {entry.get('expected')!r}, got {entry.get('value')!r})",
+                f"set config key '{key}' to the expected value",
+                f"hermes config set {key} {literal}",
+            )
+
+    # --- Cron state ------------------------------------------------------
+    cron = checks.get("cron", {})
+    if cron.get("daily_job_present") is False and checks.get(
+        "setup_module_available"
+    ) is not False:
+        add(
+            "create-daily-cron",
+            "medium",
+            "cron",
+            "the daily dreaming cron job is not present",
+            "create the daily dreaming cron via the documented setup flow",
+            "hermes mempalace-dreaming setup --apply --schedule-dreaming "
+            "--create-cron",
+        )
+    if cron.get("duplicate_dreaming_jobs") is True:
+        dup_names = [j.get("name", "") for j in cron.get("dreaming_jobs", [])]
+        add(
+            "remove-duplicate-cron",
+            "medium",
+            "cron",
+            f"multiple dreaming-like cron jobs detected: {dup_names!r}",
+            "run `hermes cron list`, identify the duplicate/legacy job by "
+            "its id, then remove it manually — the id is never inferred or "
+            "invented here",
+            "hermes cron list",
+        )
+    if cron.get("schedule_mismatch") is True:
+        job_sched = None
+        for j in cron.get("dreaming_jobs", []):
+            if j.get("schedule"):
+                job_sched = j.get("schedule")
+                break
+        expected_cron = cron.get("expected_cron_utc")
+        preview = None
+        if expected_time is not None and timezone is not None:
+            preview = (
+                "hermes mempalace-dreaming setup --apply --schedule-dreaming "
+                f"--create-cron --time {expected_time} --timezone {timezone}"
+            )
+        add(
+            "align-cron-schedule",
+            "medium",
+            "cron",
+            f"the daily cron schedule {job_sched!r} differs from the "
+            f"expected {expected_cron!r}",
+            "remove the stale daily job (see remove-duplicate-cron guidance "
+            "for the id) and recreate it with the corrected schedule via the "
+            "documented setup flow; nothing is auto-applied",
+            preview,
+        )
+
+    repairs.sort(key=lambda r: _REPAIR_PRIORITY_RANK.get(r["priority"], 99))
+
+    ok = bool(doctor.get("ok"))
+    if ok or not repairs:
+        summary = "No repairs needed; doctor reports the installation is healthy."
+    else:
+        summary = f"{len(repairs)} repair action(s) suggested, ordered by priority."
+
+    return {
+        "plugin": PLUGIN_NAME,
+        "version": PLUGIN_VERSION,
+        "hermes_home": doctor.get("hermes_home", str(Path(hermes_home).expanduser())),
+        "ok": ok,
+        "summary": summary,
+        "warnings": doctor.get("warnings", []),
+        "repairs": repairs,
+    }
+
+
 def _default_mkdir(path: str) -> None:
     Path(path).expanduser().mkdir(parents=True, exist_ok=True)
 
@@ -1233,6 +1482,14 @@ def _handle_cli(args) -> None:
         return
     if cmd == "doctor":
         report = build_doctor_report(
+            hermes_home=getattr(args, "hermes_home", "~/.hermes"),
+            expected_time=getattr(args, "expected_time", None),
+            timezone=getattr(args, "timezone", None),
+        )
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    if cmd == "repair-plan":
+        report = build_repair_plan(
             hermes_home=getattr(args, "hermes_home", "~/.hermes"),
             expected_time=getattr(args, "expected_time", None),
             timezone=getattr(args, "timezone", None),
