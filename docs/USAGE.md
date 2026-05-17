@@ -2,8 +2,11 @@
 
 Production-ready bootstrap v1.0. Every command is dry-run / read-only by
 default. Side effects happen **only** behind explicit flags (`--apply`,
-`--create-cron`, `--verify-after-apply`). Nothing here installs the MemPalace
-provider package, writes to Obsidian, or writes any memory.
+`--install-provider`, `--create-cron`, `--verify-after-apply`). Provider
+bootstrap is now supported explicitly: the plugin can copy a bundled
+`mempalace` provider into `$HERMES_HOME/plugins/mempalace/` and run
+`uv tool install --upgrade mempalace`. It still never writes to Obsidian or
+any memory.
 
 ## Commands
 
@@ -55,6 +58,8 @@ UTC-converted `cron_utc` (see
 
 ```bash
 hermes mempalace-dreaming setup                                    # dry-run JSON (no side effects)
+hermes mempalace-dreaming setup --install-provider                 # dry-run plan including provider bootstrap
+hermes mempalace-dreaming setup --apply --install-provider         # copy provider bundle + install mempalace CLI
 hermes mempalace-dreaming setup --apply                            # create dirs + run config commands
 hermes mempalace-dreaming setup --apply --schedule-dreaming --create-cron        # also create the daily cron
 hermes mempalace-dreaming setup --apply --verify-after-apply       # apply, then read-only verify
@@ -63,6 +68,14 @@ hermes mempalace-dreaming setup --apply --verify-after-apply       # apply, then
 `--apply` creates the planned directories and runs `hermes config set ...`
 (argv lists, no shell). The first failing action stops the rest and is
 reported in the JSON `errors` field; rollback notes are always printed.
+
+`--install-provider` adds the real MemPalace provider bootstrap plan to the
+JSON. With `--apply --install-provider`, the plugin copies the bundled
+provider files into `$HERMES_HOME/plugins/mempalace/` and runs the exact argv
+`["uv", "tool", "install", "--upgrade", "mempalace"]`. File copying and CLI
+installation are dependency-injected and reported under `provider` in the
+result JSON. If provider bootstrap fails, cron creation and post-apply
+verification are skipped deliberately.
 
 `--create-cron` (only with `--apply`, and only if `--schedule-dreaming`
 included a schedule) creates the daily dreaming cron through an injected
@@ -83,8 +96,8 @@ check after a clean apply and embeds it under `verification`. It is skipped
 (with a recorded reason) if apply failed early — it never inspects a
 half-applied environment.
 
-Even with every flag set, setup never installs the MemPalace provider
-package, writes to Obsidian, or writes memory.
+Even with every flag set, setup still never writes to Obsidian or writes
+memory.
 
 ### `schedule-plan` — report-only
 
@@ -273,6 +286,7 @@ are dependency-injected (`search_fn` / `remember_fn`).
 ## Safety model
 
 - No config mutation without the explicit `setup --apply` flag.
+- No provider bootstrap without explicit `setup --apply --install-provider`.
 - No cron creation without explicit `setup --apply --create-cron`; the
   created cron uses the UTC conversion of `--time`/`--timezone` (default
   timezone is UTC, never silently "local time").
@@ -293,6 +307,7 @@ apply, explicit cron creation, and explicit post-apply verification are
 implemented, dependency-injected, and covered by unit + integration-style
 tests against an isolated fake Hermes home.
 
-It assumes a Hermes MemPalace provider is **already available** in the
-environment. Installing that provider package is external and intentionally
-out of scope. See [`../ROADMAP.md`](../ROADMAP.md).
+It now includes explicit provider bootstrap for Hermes profiles, but still
+depends on the environment being able to run `uv tool install --upgrade
+mempalace`. Fresh-install behavior and non-`uv` environments remain
+deployment validation concerns. See [`../ROADMAP.md`](../ROADMAP.md).

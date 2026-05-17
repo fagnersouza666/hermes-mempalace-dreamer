@@ -40,6 +40,21 @@ def test_skill_frontmatter_version_matches_plugin():
     assert str(fm["version"]) == "1.0.1"
 
 
+def test_provider_bundle_is_present_and_profile_safe():
+    bundle = ROOT / "mempalace_dreaming" / "provider_bundle"
+    provider = bundle / "provider_init.py"
+    manifest_yaml = bundle / "plugin.yaml"
+    assert provider.is_file(), "bundled provider __init__ source missing"
+    assert manifest_yaml.is_file(), "bundled provider plugin.yaml missing"
+
+    src = provider.read_text(encoding="utf-8")
+    yml = manifest_yaml.read_text(encoding="utf-8")
+    # Profile-safe: no absolute home hardcode baked into the reusable bundle.
+    assert "/home/" not in src
+    assert "/home/" not in yml
+    assert yaml.safe_load(yml)["name"] == "mempalace"
+
+
 def test_package_modules_import_cleanly():
     sys.path.insert(0, str(ROOT))
     engine = importlib.import_module("mempalace_dreaming.engine")

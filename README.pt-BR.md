@@ -7,15 +7,17 @@
 Pacote de "sonho" (dreaming) e higiene de memória, com o MemPalace em primeiro lugar, para o [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
 **Bootstrap pronto para produção v1.0.** É uma camada de bootstrap e
-orquestração honesta e segura para ambientes que **já possuem um provider
-MemPalace do Hermes disponível**. Entrega uma superfície segura funcional
-(planejamento de setup, apply explícito e opcional, criação de cron
-explícita e opcional, verificação pós-apply explícita e opcional, `status`
-e `verify-runtime` somente leitura) e uma engine de dreaming pura, sem
-dependências. Ele **não** instala o pacote do provider MemPalace em si —
-isso permanece externo/pré-existente e específico do ambiente. Nunca escreve
-no Obsidian e nunca grava memória durante setup ou verificação. Todo efeito
-colateral é explícito e injetado por dependência.
+orquestração honesta e segura para Hermes + MemPalace. Entrega uma superfície
+segura funcional (planejamento de setup, apply explícito e opcional,
+bootstrap explícito e opcional do provider, criação de cron explícita e
+opcional, verificação pós-apply explícita e opcional, `status` e
+`verify-runtime` somente leitura) e uma engine de dreaming pura, sem
+dependências. Agora consegue bootstrapar o provider real do MemPalace de modo
+explícito via `setup --apply --install-provider`: copia o plugin provider
+empacotado para `$HERMES_HOME/plugins/mempalace/` e roda `uv tool install
+--upgrade mempalace` como argv. Nunca escreve no Obsidian e nunca grava
+memória durante setup ou verificação. Todo efeito colateral é explícito e
+injetado por dependência.
 
 Sua função é fazer a consolidação de memória do Hermes usar o MemPalace como camada principal de memória semântica, em vez de inflar os arquivos internos `MEMORY.md` / `USER.md`.
 
@@ -43,9 +45,16 @@ Partes já implementadas:
   - `mempalace_dreaming/setup.py` (`build_config_commands`, `apply_setup_plan`);
   - criação de diretórios e `hermes config set ...` só ocorrem com `--apply`;
   - efeitos colaterais são injetados (`mkdir_fn` / `run_fn` /
-    `schedule_fn` / `verify_fn`) e testados unitariamente/integração;
+    `schedule_fn` / `verify_fn` / funções de cópia+instalação do provider) e
+    testados unitariamente/integração;
   - comandos de config e de cron são listas argv, executadas via
     `subprocess` sem shell;
+  - o bootstrap do provider é **explícito e opcional** (`--apply --install-provider`):
+    o plano expõe os arquivos empacotados do provider e o argv exato da
+    instalação do CLI; no apply, copia o provider para
+    `$HERMES_HOME/plugins/mempalace/`, roda `uv tool install --upgrade
+    mempalace`, reporta o resultado em JSON e pula cron/verificação se o
+    bootstrap do provider falhar;
   - a criação de cron é **explícita e opcional** (`--apply --create-cron`):
     argv determinístico de `hermes cron create`, nome de job fixo, prompt
     conservador autocontido, skill empacotada anexada, `--deliver local`
@@ -82,13 +91,17 @@ Partes já implementadas:
 O `setup-plan` apenas imprime um plano em JSON. O `setup` usa por padrão o
 mesmo JSON dry-run; com a flag explícita `--apply` ele cria os diretórios
 planejados e executa os comandos `hermes config set ...`. Adicionar
-`--create-cron` (somente com `--apply`) cria o cron diário de dreaming via
-`schedule_fn` injetado, usando a expressão cron **em UTC** convertida a
-partir de `--time`/`--timezone`; adicionar `--verify-after-apply` roda a
-checagem somente leitura depois. Se uma ação falha sob `--apply`, o setup
-para na primeira falha e a reporta no campo `errors` do JSON. Mesmo com
-todas as flags, o setup intencionalmente **não** instala o pacote do
-provider MemPalace, não escreve no Obsidian e não grava nenhuma memória.
+`--install-provider` expõe o plano de bootstrap do provider; com
+`--apply --install-provider`, o plugin copia o bundle do provider para
+`$HERMES_HOME/plugins/mempalace/` e roda `uv tool install --upgrade
+mempalace`. Adicionar `--create-cron` (somente com `--apply`) cria o cron
+diário de dreaming via `schedule_fn` injetado, usando a expressão cron **em
+UTC** convertida a partir de `--time`/`--timezone`; adicionar
+`--verify-after-apply` roda a checagem somente leitura depois. Se uma ação
+falha sob `--apply`, o setup para na primeira falha e a reporta no campo
+`errors` do JSON; falha no bootstrap do provider também bloqueia cron e
+verificação. Mesmo com todas as flags, o setup continua sem escrever no
+Obsidian e sem gravar memória.
 
 ## Direção pretendida
 
@@ -117,7 +130,8 @@ Quando publicado e suportado pela sua versão do Hermes:
 
 ```bash
 hermes plugins install fagnersouza666/hermes-mempalace-dreamer --enable
-hermes mempalace-dreaming setup-plan --schedule-dreaming
+hermes mempalace-dreaming setup-plan --schedule-dreaming --install-provider
+hermes mempalace-dreaming setup --apply --install-provider --verify-after-apply
 ```
 
 Para desenvolvimento local:
@@ -131,6 +145,7 @@ python3 -m pytest tests -q
 ## Política de segurança atual
 
 - Sem alteração de configuração sem a flag explícita `setup --apply` (padrão é dry-run).
+- Sem bootstrap do provider sem as flags explícitas `setup --apply --install-provider`.
 - Sem criação de cron sem as flags explícitas `setup --apply --create-cron`;
   o cron criado usa a conversão UTC de `--time`/`--timezone` (timezone
   padrão é UTC, nunca silenciosamente "horário local").
@@ -153,9 +168,11 @@ pura estão implementados e cobertos por testes unitários + testes de
 integração contra um Hermes Home isolado.
 
 **Escopo de “pronto para produção”:** esta é uma camada de bootstrap e
-orquestração pronta para produção. Ela pressupõe que um provider MemPalace do
-Hermes **já exista** no ambiente — instalar esse pacote/provider continua
-sendo externo e deliberadamente fora de escopo.
+orquestração pronta para produção. Agora inclui bootstrap explícito do
+provider MemPalace para perfis Hermes, mas ainda depende de o ambiente
+conseguir executar `uv tool install --upgrade mempalace`. Comportamento em
+instalação fresca, recarga de gateway e ambientes sem `uv` continuam sendo
+itens de validação por ambiente.
 
 O agendamento agora é **ciente de timezone**: o cron criado usa a conversão
 UTC de `--time`/`--timezone`. O timezone padrão é **UTC**; para horário local,

@@ -7,14 +7,15 @@
 MemPalace-first dreaming and memory hygiene bundle for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
 **Production-ready bootstrap v1.0.** This is an honest, safe bootstrap and
-orchestration layer for environments that **already have a Hermes MemPalace
-provider available**. It ships a working safe surface (setup planning,
-explicit opt-in apply, explicit opt-in cron creation, explicit opt-in
-post-apply verification, read-only status/verify) and a pure,
-dependency-free dreaming engine. It does **not** install the MemPalace
-provider package itself — that remains external/pre-existing and
-environment-specific. It never writes to Obsidian and never writes memory
-during setup or verification. Every side effect is explicit and
+orchestration layer for Hermes + MemPalace. It ships a working safe surface
+(setup planning, explicit opt-in apply, explicit opt-in provider bootstrap,
+explicit opt-in cron creation, explicit opt-in post-apply verification,
+read-only status/verify) and a pure, dependency-free dreaming engine. It can
+now bootstrap the real MemPalace provider explicitly via
+`setup --apply --install-provider`: copy the bundled provider plugin into
+`$HERMES_HOME/plugins/mempalace/` and run `uv tool install --upgrade
+mempalace` as an argv command. It never writes to Obsidian and never writes
+memory during setup or verification. Every side effect is explicit and
 dependency-injected.
 
 Its job is to make Hermes memory consolidation use MemPalace as the primary semantic memory layer instead of bloating built-in `MEMORY.md` / `USER.md`.
@@ -43,8 +44,14 @@ Current implemented pieces:
   - `mempalace_dreaming/setup.py` (`build_config_commands`, `apply_setup_plan`);
   - directory creation and `hermes config set ...` run only with `--apply`;
   - side effects are dependency-injected (`mkdir_fn` / `run_fn` /
-    `schedule_fn` / `verify_fn`) and unit/integration-tested;
+    `schedule_fn` / `verify_fn` / provider copy+install fns) and
+    unit/integration-tested;
   - config and cron commands are argv lists, run via `subprocess` without a shell;
+  - provider bootstrap is **explicit and opt-in** (`--apply --install-provider`):
+    the setup plan exposes the bundled provider files and the exact CLI install
+    argv; apply copies the provider into `$HERMES_HOME/plugins/mempalace/`,
+    runs `uv tool install --upgrade mempalace`, reports the result in JSON,
+    and skips cron/verification if provider bootstrap fails;
   - cron creation is **explicit and opt-in** (`--apply --create-cron`):
     deterministic `hermes cron create` argv, fixed job name, conservative
     self-contained prompt, bundled skill attached, `--deliver local` so it
@@ -80,15 +87,17 @@ Current implemented pieces:
 
 `setup-plan` only prints a JSON plan. `setup` defaults to the same dry-run
 JSON; with the explicit `--apply` flag it creates the planned directories and
-runs `hermes config set ...` commands. Adding `--create-cron` (only with
-`--apply`) creates the daily dreaming cron via injected `schedule_fn`;
-adding `--verify-after-apply` runs the read-only runtime check afterwards
-and embeds it in the JSON. If an action fails under `--apply`, setup stops
-at the first failure and reports it in the JSON `errors` field (directory
-creation failing means no config command runs); cron and verification are
-then skipped, not silently attempted. Rollback notes are always printed.
-Even with every flag set, setup intentionally does **not** install the
-MemPalace provider package, write to Obsidian, or write any memories.
+runs `hermes config set ...` commands. Adding `--install-provider` exposes
+the bundled provider bootstrap plan; with `--apply --install-provider` the
+plugin copies the provider bundle into `$HERMES_HOME/plugins/mempalace/` and
+runs `uv tool install --upgrade mempalace`. Adding `--create-cron` (only with
+`--apply`) creates the daily dreaming cron via injected `schedule_fn`; adding
+`--verify-after-apply` runs the read-only runtime check afterwards and embeds
+it in the JSON. If an action fails under `--apply`, setup stops at the first
+failure and reports it in the JSON `errors` field; provider/bootstrap failure
+also gates cron and verification. Rollback notes are always printed. Even
+with every flag set, setup still does **not** write to Obsidian or write any
+memories.
 
 ## Intended direction
 
@@ -117,7 +126,8 @@ Once published and supported by your Hermes version:
 
 ```bash
 hermes plugins install fagnersouza666/hermes-mempalace-dreamer --enable
-hermes mempalace-dreaming setup-plan --schedule-dreaming
+hermes mempalace-dreaming setup-plan --schedule-dreaming --install-provider
+hermes mempalace-dreaming setup --apply --install-provider --verify-after-apply
 ```
 
 For local development:
@@ -131,6 +141,7 @@ python3 -m pytest tests -q
 ## Current safety policy
 
 - No config mutation without the explicit `setup --apply` flag (default is dry-run).
+- No provider bootstrap without the explicit `setup --apply --install-provider` flags.
 - No cron creation without the explicit `setup --apply --create-cron` flags.
 - No post-apply verification without the explicit `--verify-after-apply` flag,
   and it is skipped if apply failed early.
@@ -149,9 +160,11 @@ engine are all implemented and covered by unit + integration-style tests
 (including end-to-end runs against an isolated fake Hermes home).
 
 **Scope of "production-ready":** this is a production-ready *bootstrap and
-orchestration layer*. It assumes a Hermes MemPalace provider is already
-available in the environment — installing that provider package itself is
-external and remains out of scope by design.
+orchestration layer*. It now includes explicit MemPalace provider bootstrap
+for Hermes profiles, but still relies on the environment being able to run
+`uv tool install --upgrade mempalace` successfully. Fresh-install behavior,
+gateway reload behavior, and non-`uv` environments remain deployment
+validation concerns.
 
 See [`docs/USAGE.md`](docs/USAGE.md) for commands and the safety model,
 [`CHANGELOG.md`](CHANGELOG.md) for the v1.0.1 entry, and
