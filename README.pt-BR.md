@@ -32,11 +32,13 @@ Partes já implementadas:
 - Registra comandos de CLI:
   - `hermes mempalace-dreaming setup-plan` (sempre somente relatório)
   - `hermes mempalace-dreaming setup` (dry-run por padrão; `--apply`
-    opcional; `--create-cron` e `--verify-after-apply` explícitos e opcionais)
+    opcional; `--create-cron`, `--schedule-lean-check`,
+    `--create-lean-check-cron` e `--verify-after-apply` explícitos e opcionais)
   - `hermes mempalace-dreaming status` (JSON somente leitura: versão, módulos, flags de segurança)
   - `hermes mempalace-dreaming verify-runtime` (verificação ao vivo somente leitura do ambiente; sem efeitos colaterais)
   - `hermes mempalace-dreaming schedule-plan` (JSON somente relatório; nunca cria cron)
   - `hermes mempalace-dreaming lean-check` (JSON somente relatório; classifica material candidato local, sem gravações)
+  - `hermes mempalace-dreaming integration-report` (JSON somente relatório; integração REM-style com contradições, candidatos a supersede e clusters leves, sem gravações nem deleções)
   - `hermes mempalace-dreaming doctor` (auditoria operacional somente leitura: presença do plugin, provider de memória, coerência de configuração, estado do cron, detecção de duplicatas e desvio de timezone; nunca muta nada)
   - `hermes mempalace-dreaming repair-plan` (somente relatório: transforma os achados do doctor em um plano de reparo explícito e ordenado por prioridade, com prévias de comando; nunca aplica nenhuma correção)
 - Fornece um planejador de setup em modo dry-run:
@@ -60,6 +62,11 @@ Partes já implementadas:
     conservador autocontido, skill empacotada anexada, `--deliver local`
     para nunca transmitir a chats; sem `--create-cron` o agendamento
     permanece somente relatório;
+  - um **cron semanal separado de lean-check** também é explícito e opcional
+    (`--apply --schedule-lean-check --create-lean-check-cron`): nome de job
+    determinístico distinto (`mempalace-dreaming-weekly-lean-check`), cron
+    semanal em UTC e prompt somente leitura contra provider vivo, sem deletar,
+    compactar, reescrever ou persistir memória;
   - o agendamento é **ciente de timezone**: `--time` é um horário de parede
     interpretado em `--timezone` (nome IANA, ex.: `America/Sao_Paulo`) e
     convertido para um cron em UTC, pois o agendador roda cron em UTC. O
@@ -80,7 +87,10 @@ Partes já implementadas:
   - `render_report(report)` → resumo markdown determinístico;
   - `audit_retrieval_noise(results)` → classificação pura útil/ruído (sem gravar memória);
   - `build_lean_check_report(candidates, search_fn=…)` → JSON somente relatório classificando
-    material candidato em durável / ruído / segredo / duplicado (segredos redatados, sem gravações).
+    material candidato em durável / ruído / segredo / duplicado (segredos redatados, sem gravações);
+  - `build_integration_report(memories)` → análise REM-style somente relatório
+    de contradições, candidatos a supersede e clusters leves/determinísticos,
+    sem leituras/escritas de memória e sem deleções.
 - Inclui testes para:
   - registro do plugin;
   - contrato da skill;
@@ -97,7 +107,9 @@ planejados e executa os comandos `hermes config set ...`. Adicionar
 mempalace`. Adicionar `--create-cron` (somente com `--apply`) cria o cron
 diário de dreaming via `schedule_fn` injetado, usando a expressão cron **em
 UTC** convertida a partir de `--time`/`--timezone`; adicionar
-`--verify-after-apply` roda a checagem somente leitura depois. Se uma ação
+`--verify-after-apply` roda a checagem somente leitura depois. Adicionar
+`--schedule-lean-check --create-lean-check-cron` cria um cron semanal distinto
+de lean-check com prompt somente leitura contra o provider vivo. Se uma ação
 falha sob `--apply`, o setup para na primeira falha e a reporta no campo
 `errors` do JSON; falha no bootstrap do provider também bloqueia cron e
 verificação. Mesmo com todas as flags, o setup continua sem escrever no
@@ -110,6 +122,7 @@ O componente final deve se tornar um plugin Hermes de instalação única para:
 - dreaming de memória com MemPalace em primeiro lugar;
 - rotinas de higiene de memória / verificação de enxugamento (lean-check);
 - cron diário de dreaming opcional;
+- cron semanal opcional de lean-check contra provider vivo;
 - configuração segura de `memory.provider: mempalace`;
 - integração com um provider MemPalace do Hermes;
 - adaptação clean-room de ideias de projetos existentes de memory-dreaming.
@@ -122,7 +135,7 @@ Este projeto pega ideias emprestadas, não código, de:
 - `nexus9888/hermes-memory-skills`: estrutura Light/Deep/REM e disciplina de lean-check.
 - Plugins de provider MemPalace do Hermes: conceitos de provider nativo, prefetch, diário e grafo de conhecimento.
 
-Nenhum texto de skill de terceiros é incorporado aqui até que licença e atribuição estejam explícitas.
+Nenhum texto de skill de terceiros é incorporado aqui até que licença e atribuição estejam explícitas. Veja também [`ATTRIBUTION.md`](ATTRIBUTION.md).
 
 ## Instalação
 

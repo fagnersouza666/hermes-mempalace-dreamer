@@ -28,3 +28,19 @@ def test_workflow_runs_pytest():
     text = WORKFLOW.read_text()
     assert 'pip install pytest pyyaml' in text
     assert 'python -m pytest tests -q' in text
+
+
+def test_workflow_has_explicit_validation_steps():
+    spec = yaml.safe_load(WORKFLOW.read_text())
+    names = [
+        s.get('name', '') for s in spec['jobs']['test']['steps']
+    ]
+    assert 'Validate plugin.yaml' in names
+    assert 'Validate skill frontmatter' in names
+    assert 'Import smoke' in names
+
+
+def test_validation_steps_run_before_pytest():
+    spec = yaml.safe_load(WORKFLOW.read_text())
+    names = [s.get('name', '') for s in spec['jobs']['test']['steps']]
+    assert names.index('Import smoke') < names.index('Run tests')

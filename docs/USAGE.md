@@ -62,6 +62,7 @@ hermes mempalace-dreaming setup --install-provider                 # dry-run pla
 hermes mempalace-dreaming setup --apply --install-provider         # copy provider bundle + install mempalace CLI
 hermes mempalace-dreaming setup --apply                            # create dirs + run config commands
 hermes mempalace-dreaming setup --apply --schedule-dreaming --create-cron        # also create the daily cron
+hermes mempalace-dreaming setup --apply --schedule-lean-check --create-lean-check-cron   # also create the weekly lean-check cron
 hermes mempalace-dreaming setup --apply --verify-after-apply       # apply, then read-only verify
 ```
 
@@ -90,6 +91,24 @@ requested `--time`/`--timezone` (see
 reported under `cron` (`created`/`argv`/`error`); a cron failure — including
 an unknown timezone — is captured, not raised. Without `--create-cron`,
 scheduling stays report-only.
+
+`--schedule-lean-check` adds a separate **weekly** lean-check schedule block
+(`lean_check_schedule`) to the JSON: a report-only plan for a conservative,
+**live-provider** memory audit. `--lean-check-time` (default `06:30`),
+`--lean-check-weekday` (cron day-of-week, `0`=Sunday..`6`=Saturday, default
+`0`) and the shared `--timezone` are converted to a weekly UTC cron
+(`"MM HH * * D"`); the day-of-week is shifted if the UTC conversion crosses
+midnight, so the job still fires on the intended local weekday.
+`--create-lean-check-cron` (only with `--apply`, and only if
+`--schedule-lean-check` produced a schedule) creates that weekly cron through
+an injected `schedule_fn`, with the **distinct** deterministic job name
+`mempalace-dreaming-weekly-lean-check` and `--deliver local`. Its prompt
+explicitly queries the live MemPalace backend **read-only** and is strictly
+report-only: it never deletes, compacts, rewrites, or persists memory, and
+proposes any cleanup for explicit human approval. It is gated exactly like
+the daily cron (skipped if apply/provider failed early; failures — including
+an unknown timezone — captured under `lean_check_cron`, never raised).
+Without `--create-lean-check-cron` the weekly schedule stays report-only.
 
 `--verify-after-apply` (only with `--apply`) runs the read-only runtime
 check after a clean apply and embeds it under `verification`. It is skipped
@@ -270,6 +289,36 @@ the pure helper. Secret-like material is counted and warned about but its
 text is **redacted** in the report, never echoed back. Missing input,
 unreadable files, or invalid JSON become warnings, not a crash.
 
+### `integration-report` — report-only
+
+```bash
+hermes mempalace-dreaming integration-report --input-file memories.txt
+hermes mempalace-dreaming integration-report --json-input '["User always uses tabs", "User never uses tabs"]'
+hermes mempalace-dreaming integration-report                 # no input -> valid JSON + warning
+```
+
+A conservative, deterministic, **REM-style** integration analysis over
+already-mined memory material. Same input plumbing as `lean-check`
+(`--input-file` / `--json-input`). It reports three signals and **nothing
+else**:
+
+- `contradictions` — two memories about the same topic (≥2 shared
+  significant terms) with opposing polarity (`always` vs `never`, …) or a
+  hand-picked antonym pair (tabs vs spaces, sync vs async, …);
+- `supersede_candidates` — two memories sharing a deterministic topic key
+  where exactly one carries a recency/override marker (`now`, `instead`,
+  `no longer`, …); the marked one is the likely newer statement;
+- `clusters` — memories grouped by an identical topic key (size ≥ 2),
+  surfacing near-duplicate / consolidation candidates.
+
+It does **not** claim semantic intelligence: the heuristics are keyword /
+polarity / overlap based and the output is byte-stable for a given input.
+Secret-like and temporary/progress entries are **excluded** from the
+analysis (counted under `skipped`; secret text is never echoed). It is
+**strictly report-only**: it never reads or writes memory, never deletes or
+supersedes anything, and touches no cron/config/Obsidian/files. Resolution
+of every finding is manual and report-first.
+
 ## Pure engine API
 
 `mempalace_dreaming.engine` imports no Hermes runtime. Memory reads/writes
@@ -282,6 +331,9 @@ are dependency-injected (`search_fn` / `remember_fn`).
 - `build_lean_check_report(candidates, search_fn=…, extra_warnings=…)` →
   report-only JSON dict (durable / noisy / secret / duplicate counts +
   redacted examples + warnings/recommendations; pure, no writes)
+- `build_integration_report(memories)` → report-only JSON dict
+  (contradictions / supersede candidates / clusters; deterministic, pure,
+  no writes, no deletes)
 
 ## Safety model
 
@@ -290,6 +342,12 @@ are dependency-injected (`search_fn` / `remember_fn`).
 - No cron creation without explicit `setup --apply --create-cron`; the
   created cron uses the UTC conversion of `--time`/`--timezone` (default
   timezone is UTC, never silently "local time").
+- No weekly lean-check cron without explicit `setup --apply
+  --create-lean-check-cron`; its prompt is read-only against the live
+  provider and never deletes/compacts/persists memory.
+- `integration-report` is strictly report-only: it never reads or writes
+  memory, never deletes or supersedes anything, and touches no
+  cron/config/Obsidian/files.
 - No post-apply verification without explicit `--verify-after-apply`;
   skipped if apply failed early.
 - No Obsidian writes.

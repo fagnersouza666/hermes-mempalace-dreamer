@@ -68,12 +68,45 @@ def convert_to_utc_cron(
         "utc_time": f"{utc_dt.hour:02d}:{utc_dt.minute:02d}",
         "cron_utc": f"{utc_dt.minute:02d} {utc_dt.hour:02d} * * *",
         "utc_offset": _format_utc_offset(local_dt.utcoffset()),
+        # -1 / 0 / +1: the UTC instant can land on the previous or next day
+        # relative to the local wall-clock day. Weekly crons use this to keep
+        # the day-of-week field honest after the UTC conversion.
+        "day_offset": (utc_dt.date() - local_dt.date()).days,
         "dst_caveat": (
             "Cron fires at a fixed UTC instant. For zones that observe DST "
             "the wall-clock run time shifts by the DST delta during the "
             "opposite part of the year."
         ),
     }
+
+#: Default weekday for the weekly lean-check cron. Cron DOW convention:
+#: 0 = Sunday ... 6 = Saturday. Sunday keeps it off the work week.
+_LEAN_CHECK_DEFAULT_WEEKDAY = 0
+
+
+def convert_to_utc_weekly_cron(
+    time: str, timezone: str = DEFAULT_TIMEZONE, weekday: int = _LEAN_CHECK_DEFAULT_WEEKDAY
+) -> dict[str, Any]:
+    """Convert a weekly wall-clock ``"HH:MM"`` + weekday to a UTC weekly cron.
+
+    Reuses :func:`convert_to_utc_cron` for the time conversion, then shifts
+    the cron day-of-week field by the UTC ``day_offset`` so the job still
+    fires on the intended local weekday. Returns the daily fields plus
+    ``requested_weekday``, ``utc_weekday`` and a weekly ``cron_utc``
+    (``"MM HH * * D"``). Raises the same errors as
+    :func:`convert_to_utc_cron`; ``ValueError`` for a weekday outside 0..6.
+    """
+    if not (0 <= weekday <= 6):
+        raise ValueError(f"weekday out of range (expected 0..6): {weekday!r}")
+    conv = convert_to_utc_cron(time, timezone)
+    utc_weekday = (weekday + conv["day_offset"]) % 7
+    minute, hour = conv["cron_utc"].split()[:2]
+    conv = dict(conv)
+    conv["requested_weekday"] = weekday
+    conv["utc_weekday"] = utc_weekday
+    conv["cron_utc"] = f"{minute} {hour} * * {utc_weekday}"
+    return conv
+
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 SKILL_PATH = PLUGIN_DIR / "skills" / "mempalace-dreaming" / "SKILL.md"
@@ -216,7 +249,39 @@ def _build_provider_install_block(home: Path) -> dict[str, Any]:
     }
 
 
-def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE, install_provider: bool = False) -> dict[str, Any]:
+def _build_lean_check_schedule(
+    time: str, timezone: str, weekday: int
+) -> dict[str, Any]:
+    """Describe the weekly, live-provider lean-check cron (report-only).
+
+    Pure: only resolves the UTC weekly cron expression. An unknown timezone
+    or out-of-range weekday is captured as a ``timezone_error`` so the apply
+    layer reports a non-created cron instead of crashing.
+    """
+    schedule: dict[str, Any] = {
+        "name": "MemPalace Dreaming weekly lean-check",
+        "time": time,
+        "timezone": timezone,
+        "weekday": weekday,
+        "prompt_profile": "weekly-lean-check-live",
+        "skill": "mempalace-dreaming:mempalace-dreaming",
+    }
+    try:
+        conv = convert_to_utc_weekly_cron(time, timezone, weekday)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        schedule["timezone_error"] = (
+            f"weekly lean-check schedule not computed ({exc})"
+        )
+        return schedule
+    schedule["utc_time"] = conv["utc_time"]
+    schedule["cron_utc"] = conv["cron_utc"]
+    schedule["utc_offset"] = conv["utc_offset"]
+    schedule["utc_weekday"] = conv["utc_weekday"]
+    schedule["dst_caveat"] = conv["dst_caveat"]
+    return schedule
+
+
+def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE, install_provider: bool = False, schedule_lean_check: bool = False, lean_check_time: str = "06:30", lean_check_weekday: int = _LEAN_CHECK_DEFAULT_WEEKDAY) -> dict[str, Any]:
     """Return an idempotent setup plan without applying it.
 
     The real installer can consume this structure to print a diff, create
@@ -269,6 +334,10 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
             schedule["utc_offset"] = conv["utc_offset"]
             schedule["dst_caveat"] = conv["dst_caveat"]
         plan["schedule"] = schedule
+    if schedule_lean_check:
+        plan["lean_check_schedule"] = _build_lean_check_schedule(
+            lean_check_time, timezone, lean_check_weekday
+        )
     if install_provider:
         plan["provider_install"] = _build_provider_install_block(home)
     return plan
@@ -484,6 +553,22 @@ def _setup_cli_parser(parser) -> None:
         action="store_true",
         help="Include the explicit MemPalace provider bootstrap plan (report-only)",
     )
+    plan.add_argument(
+        "--schedule-lean-check",
+        action="store_true",
+        help="Include the weekly live-provider lean-check cron plan (report-only)",
+    )
+    plan.add_argument(
+        "--lean-check-time",
+        default="06:30",
+        help="Wall-clock time (HH:MM) for the weekly lean-check cron, interpreted in --timezone",
+    )
+    plan.add_argument(
+        "--lean-check-weekday",
+        type=int,
+        default=_LEAN_CHECK_DEFAULT_WEEKDAY,
+        help="Cron day-of-week for the weekly lean-check (0=Sunday..6=Saturday; default: 0)",
+    )
     plan.set_defaults(func=_handle_cli)
 
     setup = sub.add_parser(
@@ -523,6 +608,32 @@ def _setup_cli_parser(parser) -> None:
             "Include the explicit MemPalace provider bootstrap in the plan; "
             "with --apply, copy the bundled provider into $HERMES_HOME/plugins/mempalace/ "
             "and run 'uv tool install --upgrade mempalace'."
+        ),
+    )
+    setup.add_argument(
+        "--schedule-lean-check",
+        action="store_true",
+        help="Include the weekly live-provider lean-check cron plan (report-only)",
+    )
+    setup.add_argument(
+        "--lean-check-time",
+        default="06:30",
+        help="Wall-clock time (HH:MM) for the weekly lean-check cron, interpreted in --timezone",
+    )
+    setup.add_argument(
+        "--lean-check-weekday",
+        type=int,
+        default=_LEAN_CHECK_DEFAULT_WEEKDAY,
+        help="Cron day-of-week for the weekly lean-check (0=Sunday..6=Saturday; default: 0)",
+    )
+    setup.add_argument(
+        "--create-lean-check-cron",
+        action="store_true",
+        help=(
+            "With --apply, also create the weekly lean-check cron via "
+            "'hermes cron create' (deterministic name, deliver=local, "
+            "report-only prompt against the live provider). Without this "
+            "flag the lean-check schedule stays report-only."
         ),
     )
     setup.set_defaults(func=_handle_cli)
@@ -607,6 +718,22 @@ def _setup_cli_parser(parser) -> None:
         help='JSON array of candidate texts (or {"text": ...} objects)',
     )
     lean_check.set_defaults(func=_handle_cli)
+
+    integration = sub.add_parser(
+        "integration-report",
+        help="Report-only REM-style integration analysis (no writes)",
+    )
+    integration.add_argument(
+        "--input-file",
+        default=None,
+        help="Path to a file with one memory text per line",
+    )
+    integration.add_argument(
+        "--json-input",
+        default=None,
+        help='JSON array of memory texts (or {"text": ...} objects)',
+    )
+    integration.set_defaults(func=_handle_cli)
 
 
 # ---------------------------------------------------------------------------
@@ -1439,6 +1566,7 @@ def _apply_setup_from_args(
     mkdir_fn=_default_mkdir,
     run_fn=_default_run,
     schedule_fn=_default_schedule,
+    lean_check_schedule_fn=_default_schedule,
     provider_copy_fn=_default_provider_copy,
     provider_install_fn=_default_provider_install,
     verify_fn=None,
@@ -1462,6 +1590,11 @@ def _apply_setup_from_args(
         time=getattr(args, "time", "05:30"),
         timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
         install_provider=getattr(args, "install_provider", False),
+        schedule_lean_check=getattr(args, "schedule_lean_check", False),
+        lean_check_time=getattr(args, "lean_check_time", "06:30"),
+        lean_check_weekday=getattr(
+            args, "lean_check_weekday", _LEAN_CHECK_DEFAULT_WEEKDAY
+        ),
     )
     if verify_fn is None:
         def verify_fn() -> dict:
@@ -1474,6 +1607,10 @@ def _apply_setup_from_args(
         apply=getattr(args, "apply", False),
         schedule_fn=schedule_fn,
         create_cron=getattr(args, "create_cron", False),
+        lean_check_schedule_fn=lean_check_schedule_fn,
+        create_lean_check_cron=getattr(
+            args, "create_lean_check_cron", False
+        ),
         provider_copy_fn=provider_copy_fn,
         provider_install_fn=provider_install_fn,
         install_provider=getattr(args, "install_provider", False),
@@ -1507,6 +1644,31 @@ def _load_build_lean_check_report():
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         return module.build_lean_check_report
+
+
+def _load_build_integration_report():
+    """Resolve ``build_integration_report`` without depending on ``sys.path``.
+
+    Mirrors :func:`_load_build_lean_check_report`.
+    """
+    try:
+        from mempalace_dreaming.engine import build_integration_report
+
+        return build_integration_report
+    except ImportError:
+        import importlib.util
+        import sys
+
+        engine_path = PLUGIN_DIR / "mempalace_dreaming" / "engine.py"
+        spec = importlib.util.spec_from_file_location(
+            "mempalace_dreaming_engine", engine_path
+        )
+        if spec is None or spec.loader is None:  # pragma: no cover - defensive
+            raise
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module.build_integration_report
 
 
 def _coerce_lean_check_inputs(data: object) -> list[object]:
@@ -1589,6 +1751,13 @@ def _handle_cli(args) -> None:
         )
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return
+    if cmd == "integration-report":
+        build_integration_report = _load_build_integration_report()
+        candidates, input_warnings = _read_lean_check_inputs(args)
+        report = build_integration_report(candidates)
+        report["warnings"] = list(input_warnings) + report["warnings"]
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
     if cmd == "setup":
         result = _apply_setup_from_args(args)
         print(json.dumps(dataclasses.asdict(result), indent=2, ensure_ascii=False))
@@ -1599,6 +1768,12 @@ def _handle_cli(args) -> None:
             schedule_dreaming=getattr(args, "schedule_dreaming", False),
             time=getattr(args, "time", "05:30"),
             timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
+            install_provider=getattr(args, "install_provider", False),
+            schedule_lean_check=getattr(args, "schedule_lean_check", False),
+            lean_check_time=getattr(args, "lean_check_time", "06:30"),
+            lean_check_weekday=getattr(
+                args, "lean_check_weekday", _LEAN_CHECK_DEFAULT_WEEKDAY
+            ),
         )
         print(json.dumps(plan, indent=2, ensure_ascii=False))
 

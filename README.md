@@ -31,11 +31,13 @@ Current implemented pieces:
 - Registers CLI commands:
   - `hermes mempalace-dreaming setup-plan` (always report-only)
   - `hermes mempalace-dreaming setup` (dry-run by default; `--apply` opt-in;
-    explicit `--create-cron` and `--verify-after-apply` opt-ins)
+    explicit `--create-cron`, `--create-lean-check-cron` and
+    `--verify-after-apply` opt-ins)
   - `hermes mempalace-dreaming status` (read-only JSON: version, modules, safety flags)
   - `hermes mempalace-dreaming verify-runtime` (live read-only environment check; no side effects)
   - `hermes mempalace-dreaming schedule-plan` (report-only JSON; never creates cron)
   - `hermes mempalace-dreaming lean-check` (report-only JSON; classifies local candidate material, no writes)
+  - `hermes mempalace-dreaming integration-report` (report-only JSON; REM-style contradictions / supersede candidates / clusters; deterministic, no writes, no deletes)
   - `hermes mempalace-dreaming doctor` (read-only operational audit: plugin presence, memory provider, config coherence, cron state, duplicate/timezone-drift detection; never mutates anything)
   - `hermes mempalace-dreaming repair-plan` (report-only: turns doctor findings into an explicit, priority-ordered repair plan with command previews; never applies any fix)
 - Provides a dry-run setup planner:
@@ -57,6 +59,11 @@ Current implemented pieces:
     self-contained prompt, bundled skill attached, `--deliver local` so it
     never broadcasts to chats; without `--create-cron` scheduling stays
     report-only;
+  - a separate **weekly lean-check cron** is explicit and opt-in
+    (`--apply --schedule-lean-check --create-lean-check-cron`): a distinct
+    deterministic job name (`mempalace-dreaming-weekly-lean-check`), a weekly
+    UTC cron, and a read-only live-provider prompt that never deletes,
+    compacts, or persists memory; same early-failure gating as the daily cron;
   - cron scheduling is **timezone-aware**: `--time` is a wall-clock time
     interpreted in `--timezone` (an IANA name, e.g. `America/Sao_Paulo`) and
     converted to a UTC cron, because the scheduler runs cron in UTC. The
