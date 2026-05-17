@@ -398,7 +398,7 @@ def test_repair_plan_repair_item_shape(tmp_path):
 def test_repair_plan_cli_default_args():
     module = load_plugin()
     args = _parse(module, ["repair-plan"])
-    assert args.hermes_home == "~/.hermes"
+    assert args.hermes_home == module._default_hermes_home()
     assert args.expected_time is None
     assert args.timezone is None
     assert hasattr(args, "func")
