@@ -170,11 +170,12 @@ engine are all implemented and covered by unit + integration-style tests
 
 **Scope of "production-ready":** this is a production-ready *bootstrap and
 orchestration layer*. It now includes explicit MemPalace provider bootstrap
-for Hermes profiles, but still relies on the environment being able to run
-`uv tool install --upgrade mempalace` successfully. Fresh-install behavior,
-gateway reload behavior, and non-`uv` environments remain deployment
-validation concerns.
+for Hermes profiles and a deterministic install strategy
+(`auto|uv|pipx|pip-user`). In practice the target environment still needs at
+least one working install path for `mempalace`. What remains deployment
+validation work is the live-backend / real-gateway behavior on the target
+host, not a `uv`-only limitation in the repo code.
 
 See [`docs/USAGE.md`](docs/USAGE.md) for commands and the safety model,
-[`CHANGELOG.md`](CHANGELOG.md) for the v1.0.1 entry, and
+[`CHANGELOG.md`](CHANGELOG.md) for post-`1.0.1` hardening notes, and
 [`ROADMAP.md`](ROADMAP.md) for what is and isn't done.

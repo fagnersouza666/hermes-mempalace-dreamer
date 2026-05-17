@@ -193,6 +193,14 @@ O agendamento agora é **ciente de timezone**: o cron criado usa a conversão
 UTC de `--time`/`--timezone`. O timezone padrão é **UTC**; para horário local,
 passe `--timezone` explicitamente e confira `cron_utc` na saída JSON.
 
+Validação real em runtime também já endureceu dois pontos operacionais:
+
+- `verify-runtime`, `doctor` e `repair-plan` respeitam o Hermes home ativo
+  (helper do host / `HERMES_HOME`) em vez de cair silenciosamente em
+  `~/.hermes`;
+- o cron semanal `mempalace-dreaming-weekly-lean-check` é tratado como job
+  distinto e não como duplicata do cron diário de dreaming.
+
 Veja [`docs/USAGE.md`](docs/USAGE.md) para comandos e modelo de segurança,
-[`CHANGELOG.md`](CHANGELOG.md) para a entrada v1.0.1, e
+[`CHANGELOG.md`](CHANGELOG.md) para o hardening pós-`1.0.1`, e
 [`ROADMAP.md`](ROADMAP.md) para o que está e o que não está pronto.
