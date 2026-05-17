@@ -13,10 +13,10 @@ explicit opt-in cron creation, explicit opt-in post-apply verification,
 read-only status/verify) and a pure, dependency-free dreaming engine. It can
 now bootstrap the real MemPalace provider explicitly via
 `setup --apply --install-provider`: copy the bundled provider plugin into
-`$HERMES_HOME/plugins/mempalace/` and run `uv tool install --upgrade
-mempalace` as an argv command. It never writes to Obsidian and never writes
-memory during setup or verification. Every side effect is explicit and
-dependency-injected.
+`$HERMES_HOME/plugins/mempalace/` and install `mempalace` through an explicit,
+argv-only strategy (`--install-method auto|uv|pipx|pip-user`). It never
+writes to Obsidian and never writes memory during setup or verification.
+Every side effect is explicit and dependency-injected.
 
 Its job is to make Hermes memory consolidation use MemPalace as the primary semantic memory layer instead of bloating built-in `MEMORY.md` / `USER.md`.
 
@@ -50,10 +50,12 @@ Current implemented pieces:
     unit/integration-tested;
   - config and cron commands are argv lists, run via `subprocess` without a shell;
   - provider bootstrap is **explicit and opt-in** (`--apply --install-provider`):
-    the setup plan exposes the bundled provider files and the exact CLI install
-    argv; apply copies the provider into `$HERMES_HOME/plugins/mempalace/`,
-    runs `uv tool install --upgrade mempalace`, reports the result in JSON,
-    and skips cron/verification if provider bootstrap fails;
+    the setup plan exposes the bundled provider files and the ordered install
+    candidates; apply copies the provider into `$HERMES_HOME/plugins/mempalace/`
+    and installs the `mempalace` CLI via a configurable strategy
+    (`--install-method auto|uv|pipx|pip-user`; `auto` tries uv → pipx →
+    pip-user, first that succeeds wins), reports every attempt in JSON, and
+    skips cron/verification if all methods fail;
   - cron creation is **explicit and opt-in** (`--apply --create-cron`):
     deterministic `hermes cron create` argv, fixed job name, conservative
     self-contained prompt, bundled skill attached, `--deliver local` so it
@@ -97,14 +99,14 @@ JSON; with the explicit `--apply` flag it creates the planned directories and
 runs `hermes config set ...` commands. Adding `--install-provider` exposes
 the bundled provider bootstrap plan; with `--apply --install-provider` the
 plugin copies the provider bundle into `$HERMES_HOME/plugins/mempalace/` and
-runs `uv tool install --upgrade mempalace`. Adding `--create-cron` (only with
-`--apply`) creates the daily dreaming cron via injected `schedule_fn`; adding
-`--verify-after-apply` runs the read-only runtime check afterwards and embeds
-it in the JSON. If an action fails under `--apply`, setup stops at the first
-failure and reports it in the JSON `errors` field; provider/bootstrap failure
-also gates cron and verification. Rollback notes are always printed. Even
-with every flag set, setup still does **not** write to Obsidian or write any
-memories.
+installs `mempalace` using `--install-method` (default `auto`: uv → pipx →
+pip-user). Adding `--create-cron` (only with `--apply`) creates the daily
+dreaming cron via injected `schedule_fn`; adding `--verify-after-apply` runs
+the read-only runtime check afterwards and embeds it in the JSON. If an
+action fails under `--apply`, setup stops at the first failure and reports it
+in the JSON `errors` field; provider/bootstrap failure also gates cron and
+verification. Rollback notes are always printed. Even with every flag set,
+setup still does **not** write to Obsidian or write any memories.
 
 ## Intended direction
 

@@ -75,8 +75,8 @@ Acceptance criteria:
 - `hermes memory status` reports `provider: mempalace`.
 - Plugin can detect whether MemPalace tools are available.
 - `setup --apply --install-provider` copies the bundled provider into
-  `$HERMES_HOME/plugins/mempalace/` and runs `uv tool install --upgrade
-  mempalace`.
+  `$HERMES_HOME/plugins/mempalace/` and installs `mempalace` via the explicit
+  `--install-method` strategy (`auto|uv|pipx|pip-user`).
 - Unknown backend remains report-only, not built-in fallback.
 
 Delivered in the repo:
@@ -91,7 +91,8 @@ Delivered in the repo:
 
 Still environment-specific:
 
-- whether `uv` is present and allowed on the target machine;
+- whether at least one install path (`uv`, `pipx`, or `pip-user`) is present
+  and allowed on the target machine;
 - behavior against a truly fresh Hermes install / gateway reload path.
 
 ## 2. Dreaming engine
@@ -157,9 +158,12 @@ Now implemented (v1.0):
   — read-only, injected `verify_fn`, embedded in JSON, skipped if apply
   failed early.
 
-Still external/out of scope by design:
+Fresh-repo coverage now includes:
 
-- non-`uv` installation strategies for the MemPalace CLI/package.
+- a deterministic provider install-method strategy (`auto|uv|pipx|pip-user`)
+  with ordered fallback and honest rollback notes;
+- a fresh/fake `$HERMES_HOME` smoke in the test suite covering dry-run + apply
+  without a real Hermes runtime.
 
 ## 4. Cron routines
 
@@ -240,4 +244,5 @@ Done for the bootstrap layer (v1.0):
 Still environment-specific (out of scope here, validate per deployment):
 
 - behaviour against a specific fresh Hermes install and gateway mode;
-- non-`uv` environments that need a different package-install path.
+- whether the target machine actually has at least one working package-install
+  path among `uv`, `pipx`, or `pip-user`.

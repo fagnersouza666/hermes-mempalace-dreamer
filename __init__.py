@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone as _utc_tz
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -122,6 +123,8 @@ PROVIDER_BUNDLE_FILES = (
     ("plugin.yaml", "plugin.yaml"),
 )
 #: Isolated CLI install (no shell). Upgrades in place if already present.
+#: Kept for backward compatibility / legacy callers; the canonical source is
+#: :func:`_provider_install_argv` keyed by method.
 PROVIDER_CLI_INSTALL_ARGV = [
     "uv",
     "tool",
@@ -129,6 +132,42 @@ PROVIDER_CLI_INSTALL_ARGV = [
     "--upgrade",
     "mempalace",
 ]
+
+#: Deterministic fallback order for the ``auto`` install method. The first
+#: candidate that succeeds wins; the order is fixed (never reshuffled) so the
+#: same environment always resolves the same way and the plan/JSON can show
+#: exactly what would be attempted.
+PROVIDER_INSTALL_METHOD_ORDER = ("uv", "pipx", "pip-user")
+
+#: Every accepted ``--install-method`` value. ``auto`` walks
+#: :data:`PROVIDER_INSTALL_METHOD_ORDER`; the rest pin a single tool.
+PROVIDER_INSTALL_METHODS = ("auto",) + PROVIDER_INSTALL_METHOD_ORDER
+
+
+def _provider_install_argv(method: str) -> list[str]:
+    """Return the exact argv (never a shell string) for one concrete method.
+
+    ``pip-user`` uses :data:`sys.executable` (the interpreter Hermes runs
+    under) so the install lands in the right user site for *this* Python,
+    instead of guessing a ``python``/``python3`` on PATH. ``pipx install
+    --force`` reinstalls/upgrades in place. Raises ``ValueError`` for an
+    unknown method so callers can capture it as a plan-level error.
+    """
+    if method == "uv":
+        return ["uv", "tool", "install", "--upgrade", "mempalace"]
+    if method == "pipx":
+        return ["pipx", "install", "--force", "mempalace"]
+    if method == "pip-user":
+        return [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--user",
+            "--upgrade",
+            "mempalace",
+        ]
+    raise ValueError(f"unknown provider install method: {method!r}")
 
 PLUGIN_NAME = "mempalace-dreaming"
 PLUGIN_VERSION = "1.0.1"
@@ -220,16 +259,24 @@ def _build_status() -> dict[str, Any]:
     }
 
 
-def _build_provider_install_block(home: Path) -> dict[str, Any]:
+def _build_provider_install_block(
+    home: Path, install_method: str = "auto"
+) -> dict[str, Any]:
     """Describe the explicit MemPalace provider bootstrap (report-only).
 
     Maps each bundled artifact to a profile-safe target under
-    ``$HERMES_HOME/plugins/mempalace/``. Pure: it only resolves paths and
-    never copies, installs, or mutates anything.
+    ``$HERMES_HOME/plugins/mempalace/`` and resolves the ordered install
+    candidates for ``install_method``. ``auto`` expands to the fixed
+    :data:`PROVIDER_INSTALL_METHOD_ORDER` (uv -> pipx -> pip-user); a pinned
+    method yields a single candidate. Pure: it only resolves paths/argv and
+    never copies, installs, or mutates anything. An unknown method is
+    captured as ``install_method_error`` (no candidates) instead of raising,
+    mirroring how an unknown timezone degrades the schedule plan.
     """
     destination = home / "plugins" / "mempalace"
-    return {
+    block: dict[str, Any] = {
         "destination": str(destination),
+        "install_method": install_method,
         "files": [
             {
                 "source": str(PROVIDER_BUNDLE_DIR / src),
@@ -237,16 +284,44 @@ def _build_provider_install_block(home: Path) -> dict[str, Any]:
             }
             for src, dst in PROVIDER_BUNDLE_FILES
         ],
-        "cli_install_argv": list(PROVIDER_CLI_INSTALL_ARGV),
-        "notes": [
-            "Provider artifacts are copied verbatim; paths stay profile-safe "
-            "($HERMES_HOME / ~), no absolute home is hardcoded.",
-            "The mempalace CLI is installed via "
-            "'uv tool install --upgrade mempalace' as an argv list (no shell).",
+    }
+    if install_method not in PROVIDER_INSTALL_METHODS:
+        block["install_method_error"] = (
+            f"unknown install method {install_method!r}; expected one of "
+            + ", ".join(PROVIDER_INSTALL_METHODS)
+        )
+        block["install_candidates"] = []
+        block["cli_install_argv"] = []
+        block["notes"] = [
+            "No install candidates: the requested method is invalid.",
             "Only effective with 'setup --apply --install-provider'; dry-run "
             "just prints this block.",
-        ],
-    }
+        ]
+        return block
+
+    methods = (
+        list(PROVIDER_INSTALL_METHOD_ORDER)
+        if install_method == "auto"
+        else [install_method]
+    )
+    candidates = [
+        {"method": m, "argv": _provider_install_argv(m)} for m in methods
+    ]
+    block["install_candidates"] = candidates
+    # Backward-compatible key: the first (preferred) candidate's argv. Older
+    # callers / tests read ``cli_install_argv`` directly.
+    block["cli_install_argv"] = list(candidates[0]["argv"])
+    order_text = " -> ".join(c["method"] for c in candidates)
+    block["notes"] = [
+        "Provider artifacts are copied verbatim; paths stay profile-safe "
+        "($HERMES_HOME / ~), no absolute home is hardcoded.",
+        f"Install method '{install_method}'; candidates tried in fixed "
+        f"order: {order_text}. The first that succeeds wins; argv lists "
+        "only, never a shell string.",
+        "Only effective with 'setup --apply --install-provider'; dry-run "
+        "just prints this block.",
+    ]
+    return block
 
 
 def _build_lean_check_schedule(
@@ -281,7 +356,7 @@ def _build_lean_check_schedule(
     return schedule
 
 
-def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE, install_provider: bool = False, schedule_lean_check: bool = False, lean_check_time: str = "06:30", lean_check_weekday: int = _LEAN_CHECK_DEFAULT_WEEKDAY) -> dict[str, Any]:
+def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE, install_provider: bool = False, install_method: str = "auto", schedule_lean_check: bool = False, lean_check_time: str = "06:30", lean_check_weekday: int = _LEAN_CHECK_DEFAULT_WEEKDAY) -> dict[str, Any]:
     """Return an idempotent setup plan without applying it.
 
     The real installer can consume this structure to print a diff, create
@@ -339,7 +414,9 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
             lean_check_time, timezone, lean_check_weekday
         )
     if install_provider:
-        plan["provider_install"] = _build_provider_install_block(home)
+        plan["provider_install"] = _build_provider_install_block(
+            home, install_method
+        )
     return plan
 
 
@@ -554,6 +631,16 @@ def _setup_cli_parser(parser) -> None:
         help="Include the explicit MemPalace provider bootstrap plan (report-only)",
     )
     plan.add_argument(
+        "--install-method",
+        choices=PROVIDER_INSTALL_METHODS,
+        default="auto",
+        help=(
+            "Provider CLI install strategy: 'auto' (uv -> pipx -> pip-user, "
+            "first that works), or pin 'uv' / 'pipx' / 'pip-user'. "
+            "Reflected in the plan JSON (default: auto)."
+        ),
+    )
+    plan.add_argument(
         "--schedule-lean-check",
         action="store_true",
         help="Include the weekly live-provider lean-check cron plan (report-only)",
@@ -607,7 +694,18 @@ def _setup_cli_parser(parser) -> None:
         help=(
             "Include the explicit MemPalace provider bootstrap in the plan; "
             "with --apply, copy the bundled provider into $HERMES_HOME/plugins/mempalace/ "
-            "and run 'uv tool install --upgrade mempalace'."
+            "and install the 'mempalace' CLI via --install-method."
+        ),
+    )
+    setup.add_argument(
+        "--install-method",
+        choices=PROVIDER_INSTALL_METHODS,
+        default="auto",
+        help=(
+            "Provider CLI install strategy used with --install-provider: "
+            "'auto' tries uv -> pipx -> pip-user (first that succeeds wins), "
+            "or pin 'uv' / 'pipx' / 'pip-user'. Exposed in the result JSON "
+            "(default: auto)."
         ),
     )
     setup.add_argument(
@@ -1590,6 +1688,7 @@ def _apply_setup_from_args(
         time=getattr(args, "time", "05:30"),
         timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
         install_provider=getattr(args, "install_provider", False),
+        install_method=getattr(args, "install_method", "auto"),
         schedule_lean_check=getattr(args, "schedule_lean_check", False),
         lean_check_time=getattr(args, "lean_check_time", "06:30"),
         lean_check_weekday=getattr(
@@ -1769,6 +1868,7 @@ def _handle_cli(args) -> None:
             time=getattr(args, "time", "05:30"),
             timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
             install_provider=getattr(args, "install_provider", False),
+            install_method=getattr(args, "install_method", "auto"),
             schedule_lean_check=getattr(args, "schedule_lean_check", False),
             lean_check_time=getattr(args, "lean_check_time", "06:30"),
             lean_check_weekday=getattr(

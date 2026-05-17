@@ -196,12 +196,21 @@ def build_lean_check_cron_argv(
     ]
 
 
+#: Honest uninstall hint per install method (used in rollback notes).
+_PROVIDER_UNINSTALL_HINTS = {
+    "uv": "uv tool uninstall mempalace",
+    "pipx": "pipx uninstall mempalace",
+    "pip-user": "pip uninstall mempalace",
+}
+
+
 def _build_rollback_notes(
     directories: list[str],
     commands: list[list[str]],
     create_cron: bool,
     install_provider: bool = False,
     create_lean_check_cron: bool = False,
+    install_method: str = "auto",
 ) -> list[str]:
     notes = [
         "Setup makes no destructive changes; rollback is manual and explicit.",
@@ -241,11 +250,23 @@ def _build_rollback_notes(
             "for the lean-check schedule."
         )
     if install_provider:
+        if install_method == "auto":
+            undo_hint = (
+                "uninstall with whichever tool succeeded: "
+                "'uv tool uninstall mempalace' (uv), "
+                "'pipx uninstall mempalace' (pipx), or "
+                "'pip uninstall mempalace' (pip-user)"
+            )
+        else:
+            undo_hint = (
+                "uninstall with: "
+                f"'{_PROVIDER_UNINSTALL_HINTS.get(install_method, 'uv tool uninstall mempalace')}'"
+            )
         notes.append(
             "Provider bootstrap copies files into "
-            "$HERMES_HOME/plugins/mempalace/ and runs "
-            "'uv tool install --upgrade mempalace'. To undo: remove that "
-            "plugin directory and run 'uv tool uninstall mempalace'."
+            "$HERMES_HOME/plugins/mempalace/ and installs the 'mempalace' "
+            f"CLI (install method: {install_method}). To undo: remove that "
+            f"plugin directory and {undo_hint}."
         )
     else:
         notes.append(
@@ -328,12 +349,16 @@ def apply_setup_plan(
     schedule_planned = plan.get("schedule")
     lean_check_schedule_planned = plan.get("lean_check_schedule")
     provider_install_planned = plan.get("provider_install")
+    provider_install_method = (provider_install_planned or {}).get(
+        "install_method", "auto"
+    )
     rollback_notes = _build_rollback_notes(
         planned_directories,
         planned_commands,
         create_cron,
         install_provider,
         create_lean_check_cron,
+        provider_install_method,
     )
 
     if not apply:
@@ -447,8 +472,17 @@ def _maybe_install_provider(
         "requested": True,
         "ok": False,
         "destination": (provider_install_planned or {}).get("destination"),
+        "install_method": (provider_install_planned or {}).get(
+            "install_method", "auto"
+        ),
         "copied_files": [],
-        "cli_install": {"argv": None, "ran": False, "error": ""},
+        "cli_install": {
+            "argv": None,
+            "method": None,
+            "ran": False,
+            "error": "",
+        },
+        "attempts": [],
         "error": "",
     }
 
@@ -458,6 +492,12 @@ def _maybe_install_provider(
     if not provider_install_planned:
         base["error"] = (
             "no provider_install block in plan; pass --install-provider"
+        )
+        return base
+    if provider_install_planned.get("install_method_error"):
+        base["error"] = (
+            "invalid install method: "
+            + provider_install_planned["install_method_error"]
         )
         return base
     if provider_copy_fn is None or provider_install_fn is None:
@@ -480,17 +520,78 @@ def _maybe_install_provider(
         copied.append(target)
     base["copied_files"] = copied
 
-    cli_argv = list(provider_install_planned.get("cli_install_argv", []))
-    base["cli_install"]["argv"] = cli_argv
-    try:
-        provider_install_fn(cli_argv)
-    except Exception as exc:  # noqa: BLE001 - report, never crash apply
-        base["cli_install"]["error"] = f"mempalace CLI install failed: {exc}"
-        base["error"] = "provider files copied but CLI install failed"
+    candidates = _resolve_install_candidates(provider_install_planned)
+    if not candidates:
+        base["error"] = (
+            "provider files copied but no install candidates in plan"
+        )
         return base
+
+    attempts: list[dict[str, Any]] = []
+    chosen: dict[str, Any] | None = None
+    for cand in candidates:
+        argv = list(cand["argv"])
+        try:
+            provider_install_fn(argv)
+        except Exception as exc:  # noqa: BLE001 - report, never crash apply
+            attempts.append(
+                {
+                    "method": cand["method"],
+                    "argv": argv,
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
+            continue
+        attempts.append(
+            {
+                "method": cand["method"],
+                "argv": argv,
+                "ok": True,
+                "error": "",
+            }
+        )
+        chosen = {"method": cand["method"], "argv": argv}
+        break
+
+    base["attempts"] = attempts
+    if chosen is None:
+        summary = "; ".join(
+            f"{a['method']}: {a['error']}" for a in attempts
+        )
+        base["cli_install"]["argv"] = list(candidates[0]["argv"])
+        base["cli_install"]["error"] = (
+            f"all install methods failed ({summary})"
+        )
+        base["error"] = "provider files copied but all install methods failed"
+        return base
+
+    base["cli_install"]["argv"] = chosen["argv"]
+    base["cli_install"]["method"] = chosen["method"]
     base["cli_install"]["ran"] = True
     base["ok"] = True
     return base
+
+
+def _resolve_install_candidates(
+    provider_install_planned: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Ordered ``[{"method", "argv"}, ...]`` to try, in fixed order.
+
+    Prefers the explicit ``install_candidates`` emitted by the plan. Falls
+    back to a single ``uv`` candidate synthesized from the legacy
+    ``cli_install_argv`` so plans built by older code still apply.
+    """
+    candidates = provider_install_planned.get("install_candidates")
+    if candidates:
+        return [
+            {"method": c["method"], "argv": list(c["argv"])}
+            for c in candidates
+        ]
+    legacy_argv = provider_install_planned.get("cli_install_argv")
+    if legacy_argv:
+        return [{"method": "uv", "argv": list(legacy_argv)}]
+    return []
 
 
 def _maybe_create_cron(

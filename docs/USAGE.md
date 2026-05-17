@@ -4,9 +4,10 @@ Production-ready bootstrap v1.0. Every command is dry-run / read-only by
 default. Side effects happen **only** behind explicit flags (`--apply`,
 `--install-provider`, `--create-cron`, `--verify-after-apply`). Provider
 bootstrap is now supported explicitly: the plugin can copy a bundled
-`mempalace` provider into `$HERMES_HOME/plugins/mempalace/` and run
-`uv tool install --upgrade mempalace`. It still never writes to Obsidian or
-any memory.
+`mempalace` provider into `$HERMES_HOME/plugins/mempalace/` and install the
+`mempalace` CLI using a configurable, non-`uv`-only strategy
+(`--install-method auto|uv|pipx|pip-user`). It still never writes to Obsidian
+or any memory.
 
 ## Commands
 
@@ -59,7 +60,8 @@ UTC-converted `cron_utc` (see
 ```bash
 hermes mempalace-dreaming setup                                    # dry-run JSON (no side effects)
 hermes mempalace-dreaming setup --install-provider                 # dry-run plan including provider bootstrap
-hermes mempalace-dreaming setup --apply --install-provider         # copy provider bundle + install mempalace CLI
+hermes mempalace-dreaming setup --apply --install-provider         # copy provider bundle + install mempalace CLI (auto strategy)
+hermes mempalace-dreaming setup --apply --install-provider --install-method pipx     # pin the install tool (uv|pipx|pip-user)
 hermes mempalace-dreaming setup --apply                            # create dirs + run config commands
 hermes mempalace-dreaming setup --apply --schedule-dreaming --create-cron        # also create the daily cron
 hermes mempalace-dreaming setup --apply --schedule-lean-check --create-lean-check-cron   # also create the weekly lean-check cron
@@ -72,11 +74,25 @@ reported in the JSON `errors` field; rollback notes are always printed.
 
 `--install-provider` adds the real MemPalace provider bootstrap plan to the
 JSON. With `--apply --install-provider`, the plugin copies the bundled
-provider files into `$HERMES_HOME/plugins/mempalace/` and runs the exact argv
-`["uv", "tool", "install", "--upgrade", "mempalace"]`. File copying and CLI
-installation are dependency-injected and reported under `provider` in the
-result JSON. If provider bootstrap fails, cron creation and post-apply
-verification are skipped deliberately.
+provider files into `$HERMES_HOME/plugins/mempalace/` and installs the
+`mempalace` CLI using `--install-method` (default `auto`):
+
+| Method     | argv (never a shell string)                                            |
+|------------|------------------------------------------------------------------------|
+| `uv`       | `uv tool install --upgrade mempalace`                                  |
+| `pipx`     | `pipx install --force mempalace`                                       |
+| `pip-user` | `<python> -m pip install --user --upgrade mempalace` (this interpreter)|
+| `auto`     | tries `uv` → `pipx` → `pip-user`, in that fixed order; first that succeeds wins |
+
+The plan/result JSON exposes `install_method` and the ordered
+`install_candidates`; after apply, `provider.attempts` lists every method
+tried with its outcome and `provider.cli_install.method` names the one that
+won. An unknown method is reported as `install_method_error` instead of
+crashing. File copying and CLI installation are dependency-injected and
+reported under `provider` in the result JSON. If provider bootstrap fails
+(all methods exhausted), cron creation and post-apply verification are
+skipped deliberately. Rollback notes name the matching uninstall command for
+the method used.
 
 `--create-cron` (only with `--apply`, and only if `--schedule-dreaming`
 included a schedule) creates the daily dreaming cron through an injected
@@ -365,7 +381,9 @@ apply, explicit cron creation, and explicit post-apply verification are
 implemented, dependency-injected, and covered by unit + integration-style
 tests against an isolated fake Hermes home.
 
-It now includes explicit provider bootstrap for Hermes profiles, but still
-depends on the environment being able to run `uv tool install --upgrade
-mempalace`. Fresh-install behavior and non-`uv` environments remain
-deployment validation concerns. See [`../ROADMAP.md`](../ROADMAP.md).
+It now includes explicit provider bootstrap for Hermes profiles with a
+non-`uv`-only install strategy (`auto|uv|pipx|pip-user`), and a deterministic
+fresh/fake `$HERMES_HOME` smoke in the test suite. What stays necessarily
+external: running against a *live* MemPalace backend and a real Hermes
+gateway — the package manager that ultimately fetches `mempalace` must still
+exist on the target host. See [`../ROADMAP.md`](../ROADMAP.md).
