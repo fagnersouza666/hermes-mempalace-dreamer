@@ -133,23 +133,28 @@ hermes mempalace-dreaming doctor --expected-time 08:30 --timezone America/Sao_Pa
 
 Runs a complete read-only audit of the installation and prints a JSON report.
 It is strictly **read-only**: it runs only `hermes --version`, `hermes memory
-status`, `hermes config get <key>`, and `hermes cron list` (all via an
-injectable `run_fn`) and stats files. It **never** writes to config, memory,
-cron, Obsidian, or any file. The report is always JSON-serializable and always
+status`, `hermes config path`, and `hermes cron list` (all via an injectable
+`run_fn`), then reads and parses the YAML config file that `hermes config path`
+points at, and stats files. It **never** writes to config, memory, cron,
+Obsidian, or any file. The report is always JSON-serializable and always
 carries `ok`, `warnings`, `recommendations`, and `checks`.
 
 #### Checks performed
 
 1. **Plugin presence** — whether the bundled skill file, `mempalace_dreaming.engine`, and `mempalace_dreaming.setup` are present on disk.
 2. **Memory / Hermes CLI** — whether `hermes --version` succeeds (CLI callable) and `hermes memory status` returns a `mempalace` provider.
-3. **Config coherence** — reads each of these keys via `hermes config get` and checks their values:
+3. **Config coherence** — resolves the config file with `hermes config path`, reads and parses that YAML file (read-only, with `_`/`-` key-name tolerance), and checks these keys:
    - `memory.memory_enabled` (expect truthy)
    - `memory.user_profile_enabled` (expect truthy)
    - `memory.provider` (expect `"mempalace"`)
    - `plugins.mempalace_dreaming.enabled` (expect truthy)
    - `plugins.mempalace_dreaming.skill` (expect `"plugin:mempalace-dreaming"`)
 
-   Mismatches append specific warnings and recommendations to the report.
+   Mismatches append specific warnings and recommendations to the report. If
+   the config cannot be resolved, read, or parsed (empty `config path`, missing
+   pyyaml, unreadable file, invalid YAML, non-mapping content), a
+   `config_error` reason is reported instead of per-key results — no value is
+   guessed and no fix is invented.
 4. **Cron inspection** — parses `hermes cron list` output tolerantly (table, key-value, or JSON). Reports:
    - `daily_job_present`: whether `mempalace-dreaming-daily` exists;
    - `dreaming_jobs`: list of parsed jobs that look dreaming-related (matches names containing "dream", "sonho", or "mempalace-dreaming");
@@ -190,6 +195,45 @@ concrete next action (e.g. `hermes config set memory.provider mempalace`, or
 
 Doctor reports, it does **not** fix. No config writes, no cron changes, no
 memory or file writes.
+
+### `repair-plan` — report-only
+
+```bash
+hermes mempalace-dreaming repair-plan
+hermes mempalace-dreaming repair-plan --hermes-home ~/.hermes
+hermes mempalace-dreaming repair-plan --expected-time 08:30 --timezone America/Sao_Paulo
+```
+
+Turns the problems `doctor` detects into an explicit, machine-readable repair
+plan and prints it as JSON. It reuses `build_doctor_report` internally for
+detection (same read-only commands, same flags), then maps each failed check
+into a `repairs` list. It is **strictly report-only**: it never writes config,
+cron, memory, Obsidian, or files, and **never executes** any command — every
+`command_preview` is a string the operator may choose to run, not an action
+taken here.
+
+The payload carries `plugin`, `version`, `hermes_home`, `ok`, `summary`,
+`warnings`, and `repairs`. Each repair item has `id`, `priority`
+(`high` → `medium` → `low`), `kind` (`config` / `cron` / `plugin` /
+`memory` / `environment`), `reason`, `suggested_action`, and an optional
+`command_preview` (string or `null`). `repairs` is ordered by priority.
+
+Honesty constraints, by design:
+
+- When `doctor` is fully green, `ok` is `true` and `repairs` is `[]`.
+- It does **not** auto-fix. A `command_preview` like
+  `hermes config set memory.provider mempalace` is a suggestion, never run.
+- It **never invents a cron job id**: the duplicate-cron repair tells you to
+  run `hermes cron list` and remove the offending job by its real id yourself.
+- If the config could not be read, it reports a config-readability repair and
+  suggests **no** `hermes config set` until the config is readable.
+- If the `hermes` CLI is not callable, it gives a manual instruction with
+  `command_preview: null` — no magic fix.
+- It never raises a traceback; any failure degrades into the JSON report via
+  the underlying doctor report.
+
+`repair-plan` is the planning companion to `doctor`: `doctor` says what is
+wrong, `repair-plan` says — without doing it — what you could run to fix it.
 
 ### `lean-check` — report-only
 
@@ -240,7 +284,7 @@ are dependency-injected (`search_fn` / `remember_fn`).
 - Unknown backend fallback is report-only.
 - Memory deletion/compaction must be explicit and user-approved.
 - No hidden side effects at import/register time.
-- `doctor` is read-only: runs only read commands (`hermes --version`, `hermes memory status`, `hermes config get`, `hermes cron list`) and stats files; never writes config, memory, cron, Obsidian, or any file.
+- `doctor` and `repair-plan` are read-only: they run only read commands (`hermes --version`, `hermes memory status`, `hermes config path`, `hermes cron list`), parse the resolved YAML config, and stat files; they never write config, memory, cron, Obsidian, or any file, and never execute any `hermes config set` / `hermes cron` command.
 
 ## Production scope
 

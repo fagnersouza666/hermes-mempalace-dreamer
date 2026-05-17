@@ -30,6 +30,10 @@ Already implemented:
   - `hermes mempalace-dreaming doctor` (read-only operational audit: plugin
     presence, memory provider, config coherence, cron state, duplicate and
     timezone-drift detection; never mutates anything). **Delivered.**
+  - `hermes mempalace-dreaming repair-plan` (report-only repair plan derived
+    from `doctor` findings: priority-ordered `repairs` with non-executed
+    `command_preview` strings; no auto-fix, never invents a cron job id,
+    never mutates anything). **Delivered.**
 - Pure engine reporting/audit surface:
   - `render_report(report)` — deterministic markdown summary;
   - `audit_retrieval_noise(results)` — useful/noisy classification, no writes;
