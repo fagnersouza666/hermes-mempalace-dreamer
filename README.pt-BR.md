@@ -162,5 +162,5 @@ UTC de `--time`/`--timezone`. O timezone padrão é **UTC**; para horário local
 passe `--timezone` explicitamente e confira `cron_utc` na saída JSON.
 
 Veja [`docs/USAGE.md`](docs/USAGE.md) para comandos e modelo de segurança,
-[`CHANGELOG.md`](CHANGELOG.md) para a entrada v1.0.0, e
+[`CHANGELOG.md`](CHANGELOG.md) para a entrada v1.0.1, e
 [`ROADMAP.md`](ROADMAP.md) para o que está e o que não está pronto.

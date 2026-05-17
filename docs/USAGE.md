@@ -148,7 +148,7 @@ carries `ok`, `warnings`, `recommendations`, and `checks`.
    - `memory.user_profile_enabled` (expect truthy)
    - `memory.provider` (expect `"mempalace"`)
    - `plugins.mempalace_dreaming.enabled` (expect truthy)
-   - `plugins.mempalace_dreaming.skill` (expect `"plugin:mempalace-dreaming"`)
+   - `plugins.mempalace_dreaming.skill` (expect `"mempalace-dreaming:mempalace-dreaming"`)
 
    Mismatches append specific warnings and recommendations to the report. If
    the config cannot be resolved, read, or parsed (empty `config path`, missing

@@ -6,6 +6,8 @@ follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-17
+
 ### Added
 
 - add installation doctor command (read-only operational audit: plugin/memory/config/cron, duplicate & timezone drift detection).
@@ -16,6 +18,15 @@ follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 
 ### Fixed
 
+- correct the bundled skill reference from `plugin:mempalace-dreaming` to the
+  fully-qualified `mempalace-dreaming:mempalace-dreaming` form expected by the
+  real Hermes runtime. Propagated consistently across the setup plan, the
+  applied config keys (`plugins.mempalace_dreaming.skill`), the schedule/cron
+  skill attachment, the `doctor` expected-config map, the `repair-plan` config
+  preview literals, `docs/USAGE.md`, and the test suite — so bootstrap,
+  config, cron, doctor and repair-plan all agree on the same skill id and a
+  freshly applied environment passes its own `doctor`/`repair-plan` audit
+  instead of reporting a spurious skill-config drift.
 - harden `doctor` import fallback: `build_doctor_report()` no longer crashes
   with `ModuleNotFoundError: No module named 'mempalace_dreaming'` in the
   installed-plugin context. It now resolves `SCHEDULE_JOB_NAME` via the same

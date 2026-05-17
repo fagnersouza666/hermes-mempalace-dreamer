@@ -154,5 +154,5 @@ available in the environment — installing that provider package itself is
 external and remains out of scope by design.
 
 See [`docs/USAGE.md`](docs/USAGE.md) for commands and the safety model,
-[`CHANGELOG.md`](CHANGELOG.md) for the v1.0.0 entry, and
+[`CHANGELOG.md`](CHANGELOG.md) for the v1.0.1 entry, and
 [`ROADMAP.md`](ROADMAP.md) for what is and isn't done.

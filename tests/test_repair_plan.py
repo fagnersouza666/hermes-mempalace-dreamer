@@ -88,7 +88,7 @@ def _write_live_config(tmp_path, overrides=None):
         "plugins": {
             "mempalace-dreaming": {
                 "enabled": True,
-                "skill": "plugin:mempalace-dreaming",
+                "skill": "mempalace-dreaming:mempalace-dreaming",
             }
         },
     }
@@ -147,7 +147,7 @@ def test_repair_plan_all_green_no_repairs(tmp_path):
     report = module.build_repair_plan(str(tmp_path), run_fn=run_fn)
 
     assert report["plugin"] == "mempalace-dreaming"
-    assert report["version"] == "1.0.0"
+    assert report["version"] == "1.0.1"
     assert report["ok"] is True
     assert report["repairs"] == []
     assert report["warnings"] == []

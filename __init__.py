@@ -77,7 +77,7 @@ def convert_to_utc_cron(
 PLUGIN_DIR = Path(__file__).resolve().parent
 SKILL_PATH = PLUGIN_DIR / "skills" / "mempalace-dreaming" / "SKILL.md"
 PLUGIN_NAME = "mempalace-dreaming"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 PLUGIN_STATUS = "production-ready bootstrap v1.0"
 
 
@@ -98,7 +98,7 @@ def build_schedule_plan(
         "time": time,
         "timezone": timezone,
         "prompt_profile": "daily-conservative",
-        "skill": "plugin:mempalace-dreaming",
+        "skill": "mempalace-dreaming:mempalace-dreaming",
         "report_only": True,
         "note": (
             "Report-only: no cron job is created. Schedule this manually "
@@ -183,7 +183,7 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
             "memory.user_profile_enabled": True,
             "memory.provider": "mempalace",
             "plugins.mempalace_dreaming.enabled": True,
-            "plugins.mempalace_dreaming.skill": "plugin:mempalace-dreaming",
+            "plugins.mempalace_dreaming.skill": "mempalace-dreaming:mempalace-dreaming",
         },
         "skill": {
             "name": "mempalace-dreaming",
@@ -202,7 +202,7 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
             "time": time,
             "timezone": timezone,
             "prompt_profile": "daily-conservative",
-            "skill": "plugin:mempalace-dreaming",
+            "skill": "mempalace-dreaming:mempalace-dreaming",
         }
         try:
             conv = convert_to_utc_cron(time, timezone)
@@ -844,14 +844,14 @@ def build_doctor_report(
         "memory.user_profile_enabled": True,
         "memory.provider": "mempalace",
         "plugins.mempalace_dreaming.enabled": True,
-        "plugins.mempalace_dreaming.skill": "plugin:mempalace-dreaming",
+        "plugins.mempalace_dreaming.skill": "mempalace-dreaming:mempalace-dreaming",
     }
     expected_desc: dict[str, str] = {
         "memory.memory_enabled": "truthy",
         "memory.user_profile_enabled": "truthy",
         "memory.provider": '"mempalace"',
         "plugins.mempalace_dreaming.enabled": "truthy",
-        "plugins.mempalace_dreaming.skill": '"plugin:mempalace-dreaming"',
+        "plugins.mempalace_dreaming.skill": '"mempalace-dreaming:mempalace-dreaming"',
     }
 
     config_checks: dict[str, Any] = {}
@@ -1042,7 +1042,7 @@ def _config_expected_literal(expected_desc: str) -> str:
     """Turn a doctor ``expected`` description into a config-set literal.
 
     doctor stores expectations as human strings (``truthy``,
-    ``"mempalace"``, ``"plugin:mempalace-dreaming"``). This derives the
+    ``"mempalace"``, ``"mempalace-dreaming:mempalace-dreaming"``). This derives the
     value to show in a ``hermes config set`` *preview* (never executed),
     so repair-plan stays coherent with doctor without duplicating its map.
     """

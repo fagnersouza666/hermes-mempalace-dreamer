@@ -115,7 +115,7 @@ def test_cron_argv_defaults_to_safe_local_deliver_and_attaches_skill(tmp_path):
 
     assert "--skill" in argv
     skill = argv[argv.index("--skill") + 1]
-    assert skill == "plugin:mempalace-dreaming"
+    assert skill == "mempalace-dreaming:mempalace-dreaming"
 
 
 def test_cron_prompt_is_final_positional_conservative_no_secrets(tmp_path):
@@ -399,7 +399,7 @@ def test_cli_dry_run_with_flags_stays_side_effect_free(capsys, tmp_path):
 def test_plugin_status_reports_production_bootstrap_v1():
     module = load_plugin()
     status = module._build_status()
-    assert status["version"] == "1.0.0"
+    assert status["version"] == "1.0.1"
     assert "production" in status["status"].lower()
     assert status["safety"]["cron_creation_explicit"] is True
     assert status["safety"]["verify_after_apply_explicit"] is True

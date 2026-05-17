@@ -123,7 +123,7 @@ def build_cron_create_argv(
     cron_expr = schedule.get("cron_utc") or _cron_expr_from_time(
         schedule["time"]
     )
-    skill = schedule.get("skill", "plugin:mempalace-dreaming")
+    skill = schedule.get("skill", "mempalace-dreaming:mempalace-dreaming")
     return [
         "hermes",
         "cron",
