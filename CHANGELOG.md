@@ -6,6 +6,27 @@ follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 
 ## [Unreleased]
 
+### Fixed
+
+- honor the active Hermes home in live runtime commands and audits. Runtime
+  validation against a fresh isolated profile exposed that `verify-runtime`,
+  `doctor`, and `repair-plan` could drift back to `~/.hermes` if callers
+  relied on `HERMES_HOME`; the commands now resolve the active Hermes home via
+  the host helper when available, otherwise via `HERMES_HOME`, and only then
+  fall back to the conventional default.
+- exclude the distinct weekly lean-check cron
+  (`mempalace-dreaming-weekly-lean-check`) from the daily dreaming duplicate
+  detector in `doctor`. A valid install with both the daily cron and the
+  weekly live-provider lean-check cron no longer raises a spurious duplicate
+  dreaming-job warning.
+
+### Added
+
+- document the post-`1.0.1` production hardening that is already present on
+  `main`: explicit provider bootstrap during setup, deterministic install
+  fallback (`auto|uv|pipx|pip-user`), fresh/fake Hermes-home smoke coverage,
+  and the runtime-validation fixes above.
+
 ## [1.0.1] - 2026-05-17
 
 ### Added

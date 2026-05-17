@@ -41,6 +41,10 @@ payload always carries a top-level `ok` boolean and a `warnings` list; a
 failed subprocess becomes a warning, not a crash. Command stdout is not
 echoed into the JSON, to avoid leaking environment details.
 
+When `--hermes-home` is omitted, runtime commands honor the **active** Hermes
+home: they prefer the host helper, then `HERMES_HOME`, and only finally fall
+back to `~/.hermes`. This matters for fresh/isolated-profile validation.
+
 This is the live counterpart to `status`, which stays purely local/static.
 
 ### `setup-plan` — report-only
@@ -206,7 +210,7 @@ carries `ok`, `warnings`, `recommendations`, and `checks`.
 4. **Cron inspection** — parses `hermes cron list` output tolerantly (table, key-value, or JSON). Reports:
    - `daily_job_present`: whether `mempalace-dreaming-daily` exists;
    - `dreaming_jobs`: list of parsed jobs that look dreaming-related (matches names containing "dream", "sonho", or "mempalace-dreaming");
-   - `duplicate_dreaming_jobs`: true if more than one dreaming-like job is found (including legacy names like `Sonhos diários MemPalace`).
+   - `duplicate_dreaming_jobs`: true if more than one **daily/legacy** dreaming-like job is found (including legacy names like `Sonhos diários MemPalace`). The distinct weekly lean-check job `mempalace-dreaming-weekly-lean-check` is excluded from this duplicate detector on purpose.
 
 #### Optional schedule comparison
 
@@ -386,4 +390,7 @@ non-`uv`-only install strategy (`auto|uv|pipx|pip-user`), and a deterministic
 fresh/fake `$HERMES_HOME` smoke in the test suite. What stays necessarily
 external: running against a *live* MemPalace backend and a real Hermes
 gateway — the package manager that ultimately fetches `mempalace` must still
-exist on the target host. See [`../ROADMAP.md`](../ROADMAP.md).
+exist on the target host. Runtime validation also hardened active-home
+resolution (`HERMES_HOME` / host helper) and made `doctor` treat the weekly
+lean-check cron as distinct from the daily dreaming cron. See
+[`../ROADMAP.md`](../ROADMAP.md).

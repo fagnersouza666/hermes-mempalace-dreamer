@@ -93,7 +93,9 @@ Still environment-specific:
 
 - whether at least one install path (`uv`, `pipx`, or `pip-user`) is present
   and allowed on the target machine;
-- behavior against a truly fresh Hermes install / gateway reload path.
+- behavior against a real live-backend / gateway deployment path. Fresh/fake
+  isolated-home validation is already covered in tests and was also hardened
+  further by real runtime validation on `main`.
 
 ## 2. Dreaming engine
 
@@ -243,6 +245,6 @@ Done for the bootstrap layer (v1.0):
 
 Still environment-specific (out of scope here, validate per deployment):
 
-- behaviour against a specific fresh Hermes install and gateway mode;
+- behaviour against a live MemPalace backend and the target gateway mode;
 - whether the target machine actually has at least one working package-install
   path among `uv`, `pipx`, or `pip-user`.

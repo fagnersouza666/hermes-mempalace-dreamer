@@ -34,6 +34,15 @@ Required tools when available:
 
 If the active backend is unknown, unknown backend fallback is report-only. Do not silently write ordinary durable facts into built-in memory.
 
+Operational install/audit helpers now exist in the plugin surface as well:
+
+- `hermes mempalace-dreaming verify-runtime`
+- `hermes mempalace-dreaming doctor`
+- `hermes mempalace-dreaming repair-plan`
+
+Use them to audit whether Hermes is actually pointed at a MemPalace-backed
+profile before assuming the backend is healthy.
+
 Use built-in `memory()` only for boot-critical facts that must be present before tools run:
 
 - stable user preferences affecting every response;
