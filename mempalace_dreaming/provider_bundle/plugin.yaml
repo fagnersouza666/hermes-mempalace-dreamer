@@ -1,0 +1,54 @@
+name: mempalace
+version: 1.0.0
+description: "MemPalace local long-term memory — searches past conversations and notes via the mempalace CLI (no API key, no MCP). Auto-files turns and mirrors durable memory into a local palace."
+hooks:
+  - on_memory_write
+config:
+  cli_path:
+    description: "mempalace binary (name on PATH or absolute path)"
+    default: mempalace
+  palace_path:
+    description: "Where the MemPalace palace lives"
+    default: ~/.hermes/mempalace/palace
+  corpus_path:
+    description: "Corpus directory Hermes writes transcripts/notes into"
+    default: ~/.hermes/mempalace/hermes-corpus
+  wing:
+    description: "Wing (project) name used for search/mine"
+    default: hermes
+  agent:
+    description: "Agent name recorded on every drawer"
+    default: hermes
+  prefetch_limit:
+    description: "Max search results prefetched per turn"
+    default: 5
+  timeout_seconds:
+    description: "CLI timeout in seconds"
+    default: 45
+  sync_enabled:
+    description: "Auto-file conversation turns into the corpus"
+    default: true
+  sync_min_chars:
+    description: "Minimum combined turn length before it is filed"
+    default: 80
+  sync_max_chars:
+    description: "Max chars per user/assistant section written to a transcript"
+    default: 12000
+  auto_prefetch_enabled:
+    description: "Auto-recall from MemPalace before each turn"
+    default: true
+  prefetch_min_query_chars:
+    description: "Skip auto-recall for queries shorter than this many chars"
+    default: 18
+  prefetch_min_query_words:
+    description: "Skip auto-recall for queries with fewer words than this"
+    default: 3
+  prefetch_min_cosine:
+    description: "Drop prefetched results with cosine below this"
+    default: 0.05
+  prefetch_require_positive_bm25:
+    description: "Also require bm25>0 for non-recall queries"
+    default: false
+  prefetch_skip_patterns:
+    description: "Regexes for low-value pt/en messages that skip auto-recall (greetings, ok/yes/no, thanks, teste, continua, slash commands, acks, status pings)"
+    default: []

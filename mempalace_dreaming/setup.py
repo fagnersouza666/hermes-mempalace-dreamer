@@ -26,6 +26,8 @@ MkdirFn = Callable[[str], object]
 RunFn = Callable[[Sequence[str]], object]
 ScheduleFn = Callable[[Sequence[str]], object]
 VerifyFn = Callable[[], dict]
+ProviderCopyFn = Callable[[str, str], object]
+ProviderInstallFn = Callable[[Sequence[str]], object]
 
 #: Deterministic cron job name so re-runs target the same schedule.
 SCHEDULE_JOB_NAME = "mempalace-dreaming-daily"
@@ -53,6 +55,8 @@ class SetupResult:
     schedule_planned: dict[str, Any] | None = None
     cron: dict[str, Any] | None = None
     verification: dict[str, Any] | None = None
+    provider_install_planned: dict[str, Any] | None = None
+    provider: dict[str, Any] | None = None
     rollback_notes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -141,7 +145,10 @@ def build_cron_create_argv(
 
 
 def _build_rollback_notes(
-    directories: list[str], commands: list[list[str]], create_cron: bool
+    directories: list[str],
+    commands: list[list[str]],
+    create_cron: bool,
+    install_provider: bool = False,
 ) -> list[str]:
     notes = [
         "Setup makes no destructive changes; rollback is manual and explicit.",
@@ -168,6 +175,18 @@ def _build_rollback_notes(
         notes.append(
             "No cron job is created by setup; nothing to undo for scheduling."
         )
+    if install_provider:
+        notes.append(
+            "Provider bootstrap copies files into "
+            "$HERMES_HOME/plugins/mempalace/ and runs "
+            "'uv tool install --upgrade mempalace'. To undo: remove that "
+            "plugin directory and run 'uv tool uninstall mempalace'."
+        )
+    else:
+        notes.append(
+            "No MemPalace provider is installed by setup; nothing to undo "
+            "for the provider."
+        )
     return notes
 
 
@@ -181,6 +200,9 @@ def apply_setup_plan(
     create_cron: bool = False,
     verify_fn: VerifyFn | None = None,
     verify_after_apply: bool = False,
+    provider_copy_fn: ProviderCopyFn | None = None,
+    provider_install_fn: ProviderInstallFn | None = None,
+    install_provider: bool = False,
 ) -> SetupResult:
     """Apply (or describe) a setup plan.
 
@@ -213,12 +235,25 @@ def apply_setup_plan(
     a half-applied environment. Otherwise the injected, read-only
     ``verify_fn`` is called and its report embedded in
     ``result.verification``.
+
+    MemPalace provider bootstrap happens **only** when ``apply=True`` *and*
+    ``install_provider=True``, after a clean directory+config apply. The
+    injected ``provider_copy_fn(source, target)`` copies each bundled
+    provider artifact into ``$HERMES_HOME/plugins/mempalace/`` and the
+    injected ``provider_install_fn(argv)`` runs the ``mempalace`` CLI
+    install as an argv list (never a shell string). The outcome is captured
+    in ``result.provider`` (``ok``/``copied_files``/``cli_install``/
+    ``error``); any failure is reported there, never raised, and is treated
+    as an early failure so cron/verify are skipped. When ``install_provider``
+    is not requested, ``result.provider`` stays ``None`` and the bundle is
+    only described via ``provider_install_planned``.
     """
     planned_directories = list(plan.get("directories", []))
     planned_commands = build_config_commands(plan)
     schedule_planned = plan.get("schedule")
+    provider_install_planned = plan.get("provider_install")
     rollback_notes = _build_rollback_notes(
-        planned_directories, planned_commands, create_cron
+        planned_directories, planned_commands, create_cron, install_provider
     )
 
     if not apply:
@@ -229,6 +264,8 @@ def apply_setup_plan(
             schedule_planned=schedule_planned,
             cron=None,
             verification=None,
+            provider_install_planned=provider_install_planned,
+            provider=None,
             rollback_notes=rollback_notes,
             errors=[],
         )
@@ -256,17 +293,30 @@ def apply_setup_plan(
 
     apply_failed_early = bool(errors)
 
+    provider = _maybe_install_provider(
+        provider_install_planned,
+        provider_copy_fn=provider_copy_fn,
+        provider_install_fn=provider_install_fn,
+        install_provider=install_provider,
+        apply_failed_early=apply_failed_early,
+    )
+
+    # A failed provider bootstrap is itself an early failure: cron and
+    # verification must not run against a half-installed environment.
+    provider_failed = provider is not None and provider.get("ok") is False
+    failed_early = apply_failed_early or provider_failed
+
     cron = _maybe_create_cron(
         schedule_planned,
         schedule_fn=schedule_fn,
         create_cron=create_cron,
-        apply_failed_early=apply_failed_early,
+        apply_failed_early=failed_early,
     )
 
     verification = _maybe_verify(
         verify_fn=verify_fn,
         verify_after_apply=verify_after_apply,
-        apply_failed_early=apply_failed_early,
+        apply_failed_early=failed_early,
     )
 
     return SetupResult(
@@ -276,9 +326,80 @@ def apply_setup_plan(
         schedule_planned=schedule_planned,
         cron=cron,
         verification=verification,
+        provider_install_planned=provider_install_planned,
+        provider=provider,
         rollback_notes=rollback_notes,
         errors=errors,
     )
+
+
+def _maybe_install_provider(
+    provider_install_planned: dict[str, Any] | None,
+    *,
+    provider_copy_fn: ProviderCopyFn | None,
+    provider_install_fn: ProviderInstallFn | None,
+    install_provider: bool,
+    apply_failed_early: bool,
+) -> dict[str, Any] | None:
+    """Bootstrap the real MemPalace provider, or explain why it was not.
+
+    Returns ``None`` when provider install was not requested (the bundle is
+    only described via ``provider_install_planned``). Otherwise returns a
+    JSON-serializable dict with ``requested``/``ok``/``destination``/
+    ``copied_files``/``cli_install``/``error``. Never raises: a copy or CLI
+    failure is captured here and surfaces as ``ok=False``.
+    """
+    if not install_provider:
+        return None
+
+    base = {
+        "requested": True,
+        "ok": False,
+        "destination": (provider_install_planned or {}).get("destination"),
+        "copied_files": [],
+        "cli_install": {"argv": None, "ran": False, "error": ""},
+        "error": "",
+    }
+
+    if apply_failed_early:
+        base["error"] = "skipped: apply failed early; provider not installed"
+        return base
+    if not provider_install_planned:
+        base["error"] = (
+            "no provider_install block in plan; pass --install-provider"
+        )
+        return base
+    if provider_copy_fn is None or provider_install_fn is None:
+        base["error"] = (
+            "no provider_copy_fn/provider_install_fn injected; "
+            "cannot install provider"
+        )
+        return base
+
+    copied: list[str] = []
+    for entry in provider_install_planned.get("files", []):
+        source = entry["source"]
+        target = entry["target"]
+        try:
+            provider_copy_fn(source, target)
+        except Exception as exc:  # noqa: BLE001 - report, never crash apply
+            base["copied_files"] = copied
+            base["error"] = f"failed to copy {source!r} -> {target!r}: {exc}"
+            return base
+        copied.append(target)
+    base["copied_files"] = copied
+
+    cli_argv = list(provider_install_planned.get("cli_install_argv", []))
+    base["cli_install"]["argv"] = cli_argv
+    try:
+        provider_install_fn(cli_argv)
+    except Exception as exc:  # noqa: BLE001 - report, never crash apply
+        base["cli_install"]["error"] = f"mempalace CLI install failed: {exc}"
+        base["error"] = "provider files copied but CLI install failed"
+        return base
+    base["cli_install"]["ran"] = True
+    base["ok"] = True
+    return base
 
 
 def _maybe_create_cron(

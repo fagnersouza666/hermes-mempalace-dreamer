@@ -403,3 +403,304 @@ def test_plugin_status_reports_production_bootstrap_v1():
     assert "production" in status["status"].lower()
     assert status["safety"]["cron_creation_explicit"] is True
     assert status["safety"]["verify_after_apply_explicit"] is True
+    # New explicit, opt-in MemPalace provider bootstrap.
+    assert status["safety"]["provider_install_explicit"] is True
+
+
+# --- explicit, opt-in MemPalace provider install --------------------------
+
+
+class ProviderRecorder(Recorder):
+    """Recorder that also captures provider copy/install side effects."""
+
+    def __init__(self):
+        super().__init__()
+        self.copies = []
+        self.installs = []
+
+    def provider_copy(self, source, target):
+        self.copies.append((source, target))
+
+    def provider_install(self, argv):
+        self.installs.append(list(argv))
+
+
+def test_setup_plan_has_provider_install_block_only_when_requested(tmp_path):
+    module = load_plugin()
+
+    plan_off = module.build_setup_plan(hermes_home=tmp_path)
+    assert "provider_install" not in plan_off
+
+    plan_on = module.build_setup_plan(
+        hermes_home=tmp_path, install_provider=True
+    )
+    block = plan_on["provider_install"]
+    assert block["destination"] == str(
+        Path(tmp_path) / "plugins" / "mempalace"
+    )
+    targets = {Path(f["target"]).name for f in block["files"]}
+    assert targets == {"__init__.py", "plugin.yaml"}
+    for f in block["files"]:
+        assert Path(f["source"]).is_file(), f
+        assert f["target"].startswith(block["destination"])
+    assert block["cli_install_argv"] == [
+        "uv",
+        "tool",
+        "install",
+        "--upgrade",
+        "mempalace",
+    ]
+
+
+def test_dry_run_with_install_provider_is_side_effect_free(tmp_path):
+    plan = module = load_plugin().build_setup_plan(
+        hermes_home=tmp_path, install_provider=True
+    )
+    rec = ProviderRecorder()
+
+    result = apply_setup_plan(
+        plan,
+        mkdir_fn=rec.mkdir,
+        run_fn=rec.run,
+        provider_copy_fn=rec.provider_copy,
+        provider_install_fn=rec.provider_install,
+        apply=False,
+        install_provider=True,
+    )
+
+    assert result.applied is False
+    assert rec.copies == []
+    assert rec.installs == []
+    assert result.provider is None
+    # Dry-run still reports what would be installed.
+    assert result.provider_install_planned == plan["provider_install"]
+
+
+def test_apply_without_install_provider_keeps_provider_none(tmp_path):
+    module = load_plugin()
+    plan = module.build_setup_plan(hermes_home=tmp_path)
+    rec = ProviderRecorder()
+
+    result = apply_setup_plan(
+        plan,
+        mkdir_fn=rec.mkdir,
+        run_fn=rec.run,
+        provider_copy_fn=rec.provider_copy,
+        provider_install_fn=rec.provider_install,
+        apply=True,
+    )
+
+    assert result.provider is None
+    assert rec.copies == []
+    assert rec.installs == []
+
+
+def test_apply_with_install_provider_copies_and_installs(tmp_path):
+    module = load_plugin()
+    plan = module.build_setup_plan(
+        hermes_home=tmp_path, install_provider=True
+    )
+    rec = ProviderRecorder()
+
+    result = apply_setup_plan(
+        plan,
+        mkdir_fn=rec.mkdir,
+        run_fn=rec.run,
+        provider_copy_fn=rec.provider_copy,
+        provider_install_fn=rec.provider_install,
+        apply=True,
+        install_provider=True,
+    )
+
+    block = plan["provider_install"]
+    expected_copies = [(f["source"], f["target"]) for f in block["files"]]
+    assert rec.copies == expected_copies
+    assert rec.installs == [block["cli_install_argv"]]
+    assert result.provider is not None
+    assert result.provider["ok"] is True
+    assert result.provider["copied_files"] == [
+        f["target"] for f in block["files"]
+    ]
+    assert result.provider["cli_install"]["ran"] is True
+    assert result.provider["cli_install"]["error"] == ""
+    assert result.provider["error"] == ""
+    # No shell strings anywhere.
+    for argv in rec.installs:
+        assert isinstance(argv, list)
+
+
+def test_provider_copy_failure_is_reported_not_raised(tmp_path):
+    module = load_plugin()
+    plan = module.build_setup_plan(
+        hermes_home=tmp_path, install_provider=True
+    )
+    rec = ProviderRecorder()
+
+    def boom_copy(source, target):
+        raise OSError("read-only filesystem")
+
+    result = apply_setup_plan(
+        plan,
+        mkdir_fn=rec.mkdir,
+        run_fn=rec.run,
+        provider_copy_fn=boom_copy,
+        provider_install_fn=rec.provider_install,
+        schedule_fn=rec.schedule,
+        verify_fn=rec.verify,
+        apply=True,
+        install_provider=True,
+        create_cron=True,
+        verify_after_apply=True,
+    )
+
+    assert result.provider is not None
+    assert result.provider["ok"] is False
+    assert "read-only filesystem" in result.provider["error"]
+    # CLI install never attempted after a copy failure.
+    assert rec.installs == []
+    # Provider failure is an early failure: cron/verify must be skipped.
+    assert rec.schedules == []
+    assert rec.verifies == 0
+    assert result.cron is not None and result.cron["created"] is False
+    assert result.verification is not None
+    assert result.verification["ran"] is False
+
+
+def test_provider_cli_install_failure_is_reported_not_raised(tmp_path):
+    module = load_plugin()
+    plan = module.build_setup_plan(
+        hermes_home=tmp_path, install_provider=True
+    )
+    rec = ProviderRecorder()
+
+    def boom_install(argv):
+        raise RuntimeError("uv not found")
+
+    result = apply_setup_plan(
+        plan,
+        mkdir_fn=rec.mkdir,
+        run_fn=rec.run,
+        provider_copy_fn=rec.provider_copy,
+        provider_install_fn=boom_install,
+        schedule_fn=rec.schedule,
+        verify_fn=rec.verify,
+        apply=True,
+        install_provider=True,
+        create_cron=True,
+        verify_after_apply=True,
+    )
+
+    # Files were copied before the CLI step failed.
+    assert rec.copies
+    assert result.provider is not None
+    assert result.provider["ok"] is False
+    assert result.provider["cli_install"]["ran"] is False
+    assert "uv not found" in result.provider["cli_install"]["error"]
+    # Provider failure gates cron/verify.
+    assert rec.schedules == []
+    assert rec.verifies == 0
+
+
+def test_provider_install_skipped_when_apply_fails_early(tmp_path):
+    module = load_plugin()
+    plan = module.build_setup_plan(
+        hermes_home=tmp_path, install_provider=True
+    )
+    rec = ProviderRecorder()
+
+    def bad_mkdir(path):
+        raise RuntimeError("disk full")
+
+    result = apply_setup_plan(
+        plan,
+        mkdir_fn=bad_mkdir,
+        run_fn=rec.run,
+        provider_copy_fn=rec.provider_copy,
+        provider_install_fn=rec.provider_install,
+        apply=True,
+        install_provider=True,
+    )
+
+    assert result.errors
+    assert rec.copies == []
+    assert rec.installs == []
+    assert result.provider is not None
+    assert result.provider["ok"] is False
+    assert "skip" in result.provider["error"].lower()
+
+
+def test_rollback_notes_mention_provider_when_requested(tmp_path):
+    module = load_plugin()
+    plan = module.build_setup_plan(
+        hermes_home=tmp_path, install_provider=True
+    )
+    rec = ProviderRecorder()
+
+    result = apply_setup_plan(
+        plan,
+        mkdir_fn=rec.mkdir,
+        run_fn=rec.run,
+        provider_copy_fn=rec.provider_copy,
+        provider_install_fn=rec.provider_install,
+        apply=True,
+        install_provider=True,
+    )
+
+    joined = " ".join(result.rollback_notes).lower()
+    assert "mempalace" in joined and "uv tool uninstall" in joined
+
+
+def test_cli_install_provider_flag_defaults_off_and_is_apply_only(
+    capsys, tmp_path
+):
+    module = load_plugin()
+    parser = argparse.ArgumentParser()
+    module._setup_cli_parser(parser)
+
+    args = parser.parse_args(["setup", "--hermes-home", str(tmp_path)])
+    assert args.install_provider is False
+
+    # Dry-run with the flag set must not touch the filesystem.
+    args = parser.parse_args(
+        ["setup", "--hermes-home", str(tmp_path), "--install-provider"]
+    )
+    args.func(args)
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["applied"] is False
+    assert payload["provider"] is None
+    assert payload["provider_install_planned"] is not None
+    assert not (tmp_path / "plugins").exists()
+
+
+def test_cli_apply_install_provider_end_to_end(tmp_path):
+    module = load_plugin()
+    parser = argparse.ArgumentParser()
+    module._setup_cli_parser(parser)
+    args = parser.parse_args(
+        [
+            "setup",
+            "--hermes-home",
+            str(tmp_path),
+            "--apply",
+            "--install-provider",
+        ]
+    )
+    rec = ProviderRecorder()
+
+    result = module._apply_setup_from_args(
+        args,
+        mkdir_fn=rec.mkdir,
+        run_fn=rec.run,
+        provider_copy_fn=rec.provider_copy,
+        provider_install_fn=rec.provider_install,
+    )
+
+    assert result.applied is True
+    assert result.errors == []
+    assert result.provider["ok"] is True
+    assert rec.copies and rec.installs == [
+        ["uv", "tool", "install", "--upgrade", "mempalace"]
+    ]
+    import dataclasses
+
+    json.dumps(dataclasses.asdict(result))

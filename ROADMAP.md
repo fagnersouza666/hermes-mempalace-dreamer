@@ -7,9 +7,9 @@ and orchestration layer*: explicit apply, explicit opt-in cron creation, and
 explicit opt-in post-apply verification, all dependency-injected and covered
 by unit + integration-style tests against an isolated fake Hermes home.
 
-It assumes a Hermes MemPalace provider is **already available** in the
-environment. Installing that provider package itself is external and
-intentionally out of scope (see section 1).
+It now includes an explicit MemPalace provider bootstrap path in setup:
+bundled provider files + `uv tool install --upgrade mempalace`, both behind
+the explicit `--install-provider` flag (see section 1).
 
 Already implemented:
 
@@ -58,33 +58,41 @@ Already implemented:
 Deliberately not implemented yet:
 
 - config mutation without explicit `--apply` (default stays dry-run);
-- MemPalace package installation;
-- provider installation;
-- cron creation (apply mode still does not create cron);
 - memory writing (no memory writes during setup);
 - Obsidian writes;
 - vendoring third-party skills with unclear license.
 
-## 1. Provider strategy
+## 1. Provider strategy — DELIVERED FOR THE SAFE BOOTSTRAP PATH
 
-Choose one path:
+Chosen path:
 
-1. Depend on an existing Hermes MemPalace provider plugin and configure it.
-2. Vendor/adapt a provider only if the license is explicit and compatible.
-3. Ship a minimal provider in this repo.
-
-Recommendation: start with dependency/configuration, not vendoring. Less code, less legal mud.
+1. Ship a minimal provider bundle in this repo for the safe bootstrap path.
+2. Keep the actual setup mutation explicit and opt-in via `--install-provider`.
+3. Keep unknown backend behavior report-only; never invent a fallback.
 
 Acceptance criteria:
 
 - `hermes memory status` reports `provider: mempalace`.
 - Plugin can detect whether MemPalace tools are available.
+- `setup --apply --install-provider` copies the bundled provider into
+  `$HERMES_HOME/plugins/mempalace/` and runs `uv tool install --upgrade
+  mempalace`.
 - Unknown backend remains report-only, not built-in fallback.
 
-Partially addressed: `verify-runtime` already parses `hermes memory status`
-read-only and reports whether the provider looks like `mempalace` (warning,
-never a fallback or mutation). It does not yet install or configure a
-provider — that is still future work below.
+Delivered in the repo:
+
+- `verify-runtime` parses `hermes memory status` read-only and reports whether
+  the provider looks like `mempalace`.
+- `setup-plan` / `setup` can now include a provider bootstrap plan when
+  `--install-provider` is requested.
+- `setup --apply --install-provider` copies the bundled provider files and
+  runs the CLI install argv explicitly; failures are reported in JSON and gate
+  later cron/verification steps.
+
+Still environment-specific:
+
+- whether `uv` is present and allowed on the target machine;
+- behavior against a truly fresh Hermes install / gateway reload path.
 
 ## 2. Dreaming engine
 
@@ -141,7 +149,7 @@ Now implemented (v1.0):
 
 Still external/out of scope by design:
 
-- installing the `mempalace` provider package itself (environment-specific).
+- non-`uv` installation strategies for the MemPalace CLI/package.
 
 ## 4. Cron routines
 
@@ -201,5 +209,5 @@ Done for the bootstrap layer (v1.0):
 
 Still environment-specific (out of scope here, validate per deployment):
 
-- installing the MemPalace provider package itself;
-- behaviour against a specific fresh Hermes install and gateway mode.
+- behaviour against a specific fresh Hermes install and gateway mode;
+- non-`uv` environments that need a different package-install path.

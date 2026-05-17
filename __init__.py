@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+import shutil
 import subprocess
 from datetime import datetime, timezone as _utc_tz
 from pathlib import Path
@@ -76,6 +77,26 @@ def convert_to_utc_cron(
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 SKILL_PATH = PLUGIN_DIR / "skills" / "mempalace-dreaming" / "SKILL.md"
+
+#: Bundled MemPalace provider artifacts. Profile-safe (no absolute home
+#: hardcode); copied verbatim into ``$HERMES_HOME/plugins/mempalace/`` only
+#: behind the explicit ``setup --apply --install-provider`` flag. Stored as
+#: ``provider_init.py`` so it is never auto-imported here (it imports the
+#: Hermes runtime ``agent.memory_provider``); it lands as ``__init__.py``.
+PROVIDER_BUNDLE_DIR = PLUGIN_DIR / "mempalace_dreaming" / "provider_bundle"
+PROVIDER_BUNDLE_FILES = (
+    ("provider_init.py", "__init__.py"),
+    ("plugin.yaml", "plugin.yaml"),
+)
+#: Isolated CLI install (no shell). Upgrades in place if already present.
+PROVIDER_CLI_INSTALL_ARGV = [
+    "uv",
+    "tool",
+    "install",
+    "--upgrade",
+    "mempalace",
+]
+
 PLUGIN_NAME = "mempalace-dreaming"
 PLUGIN_VERSION = "1.0.1"
 PLUGIN_STATUS = "production-ready bootstrap v1.0"
@@ -161,11 +182,41 @@ def _build_status() -> dict[str, Any]:
             "schedule_report_only": True,
             "cron_creation_explicit": True,
             "verify_after_apply_explicit": True,
+            "provider_install_explicit": True,
         },
     }
 
 
-def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE) -> dict[str, Any]:
+def _build_provider_install_block(home: Path) -> dict[str, Any]:
+    """Describe the explicit MemPalace provider bootstrap (report-only).
+
+    Maps each bundled artifact to a profile-safe target under
+    ``$HERMES_HOME/plugins/mempalace/``. Pure: it only resolves paths and
+    never copies, installs, or mutates anything.
+    """
+    destination = home / "plugins" / "mempalace"
+    return {
+        "destination": str(destination),
+        "files": [
+            {
+                "source": str(PROVIDER_BUNDLE_DIR / src),
+                "target": str(destination / dst),
+            }
+            for src, dst in PROVIDER_BUNDLE_FILES
+        ],
+        "cli_install_argv": list(PROVIDER_CLI_INSTALL_ARGV),
+        "notes": [
+            "Provider artifacts are copied verbatim; paths stay profile-safe "
+            "($HERMES_HOME / ~), no absolute home is hardcoded.",
+            "The mempalace CLI is installed via "
+            "'uv tool install --upgrade mempalace' as an argv list (no shell).",
+            "Only effective with 'setup --apply --install-provider'; dry-run "
+            "just prints this block.",
+        ],
+    }
+
+
+def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE, install_provider: bool = False) -> dict[str, Any]:
     """Return an idempotent setup plan without applying it.
 
     The real installer can consume this structure to print a diff, create
@@ -191,7 +242,7 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
             "path": str(SKILL_PATH),
         },
         "notes": [
-            "Install/enable a MemPalace MemoryProvider separately or via a future installer step.",
+            "Bootstrap the real MemPalace provider explicitly with 'setup --apply --install-provider' (opt-in), or install/enable a MemoryProvider separately.",
             "Restart Hermes or start a fresh session after config changes.",
             "Dreaming cron is opt-in; daily automation must be conservative and report-first.",
         ],
@@ -218,6 +269,8 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
             schedule["utc_offset"] = conv["utc_offset"]
             schedule["dst_caveat"] = conv["dst_caveat"]
         plan["schedule"] = schedule
+    if install_provider:
+        plan["provider_install"] = _build_provider_install_block(home)
     return plan
 
 
@@ -426,6 +479,11 @@ def _setup_cli_parser(parser) -> None:
     plan.add_argument("--schedule-dreaming", action="store_true", help="Include optional dreaming cron plan")
     plan.add_argument("--time", default="05:30", help="Wall-clock time (HH:MM) for the optional dreaming cron, interpreted in --timezone")
     plan.add_argument("--timezone", default=DEFAULT_TIMEZONE, help=f"IANA timezone for --time (default: {DEFAULT_TIMEZONE}; the cron is converted to UTC)")
+    plan.add_argument(
+        "--install-provider",
+        action="store_true",
+        help="Include the explicit MemPalace provider bootstrap plan (report-only)",
+    )
     plan.set_defaults(func=_handle_cli)
 
     setup = sub.add_parser(
@@ -456,6 +514,15 @@ def _setup_cli_parser(parser) -> None:
         help=(
             "With --apply, run a read-only runtime verification afterwards "
             "and include it in the JSON (skipped if apply failed early)."
+        ),
+    )
+    setup.add_argument(
+        "--install-provider",
+        action="store_true",
+        help=(
+            "Include the explicit MemPalace provider bootstrap in the plan; "
+            "with --apply, copy the bundled provider into $HERMES_HOME/plugins/mempalace/ "
+            "and run 'uv tool install --upgrade mempalace'."
         ),
     )
     setup.set_defaults(func=_handle_cli)
@@ -1283,6 +1350,18 @@ def _default_schedule(argv) -> None:
     subprocess.run(list(argv), check=True)
 
 
+def _default_provider_copy(source: str, target: str) -> None:
+    """Copy a bundled provider artifact into the Hermes plugins directory."""
+    target_path = Path(target).expanduser()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(Path(source).expanduser(), target_path)
+
+
+def _default_provider_install(argv) -> None:
+    """Install the mempalace CLI via an argv list (never a shell string)."""
+    subprocess.run(list(argv), check=True)
+
+
 def _load_apply_setup_plan():
     """Resolve ``apply_setup_plan`` without depending on ``sys.path``.
 
@@ -1360,6 +1439,8 @@ def _apply_setup_from_args(
     mkdir_fn=_default_mkdir,
     run_fn=_default_run,
     schedule_fn=_default_schedule,
+    provider_copy_fn=_default_provider_copy,
+    provider_install_fn=_default_provider_install,
     verify_fn=None,
 ):
     """Build the plan from CLI args and apply (or describe) it.
@@ -1380,6 +1461,7 @@ def _apply_setup_from_args(
         schedule_dreaming=getattr(args, "schedule_dreaming", False),
         time=getattr(args, "time", "05:30"),
         timezone=getattr(args, "timezone", DEFAULT_TIMEZONE),
+        install_provider=getattr(args, "install_provider", False),
     )
     if verify_fn is None:
         def verify_fn() -> dict:
@@ -1392,6 +1474,9 @@ def _apply_setup_from_args(
         apply=getattr(args, "apply", False),
         schedule_fn=schedule_fn,
         create_cron=getattr(args, "create_cron", False),
+        provider_copy_fn=provider_copy_fn,
+        provider_install_fn=provider_install_fn,
+        install_provider=getattr(args, "install_provider", False),
         verify_fn=verify_fn,
         verify_after_apply=getattr(args, "verify_after_apply", False),
     )
