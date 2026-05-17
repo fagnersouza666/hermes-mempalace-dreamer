@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_pyproject_declares_build_system():
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert data["project"]["name"] == "hermes-mempalace-dreamer"
-    assert data["project"]["version"] == "1.0.0"
+    assert data["project"]["version"] == "1.0.1"
 
     build_system = data["build-system"]
     assert build_system["requires"], "build-system.requires must not be empty"
@@ -26,7 +26,7 @@ def test_pyproject_declares_build_system():
 def test_plugin_yaml_is_well_formed_and_side_effect_free():
     data = yaml.safe_load((ROOT / "plugin.yaml").read_text())
     assert data["name"] == "mempalace-dreaming"
-    assert str(data["version"]) == "1.0.0"
+    assert str(data["version"]) == "1.0.1"
     # No hooks => no hidden side effects wired at register time.
     assert data["hooks"] == []
 
@@ -37,7 +37,7 @@ def test_skill_frontmatter_version_matches_plugin():
     end = text.find("\n---\n", 3)
     fm = yaml.safe_load(text[3:end])
     assert fm["name"] == "mempalace-dreaming"
-    assert str(fm["version"]) == "1.0.0"
+    assert str(fm["version"]) == "1.0.1"
 
 
 def test_package_modules_import_cleanly():

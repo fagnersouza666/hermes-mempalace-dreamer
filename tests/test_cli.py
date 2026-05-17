@@ -39,7 +39,7 @@ def test_status_prints_json_describing_plugin_and_safety(capsys):
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["plugin"] == "mempalace-dreaming"
-    assert payload["version"] == "1.0.0"
+    assert payload["version"] == "1.0.1"
     assert payload["status"]
     assert payload["bundled_skill_exists"] is True
     assert payload["engine_module_available"] is True
@@ -69,7 +69,7 @@ def test_schedule_plan_prints_only_a_json_plan(capsys):
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["time"] == "05:30"
-    assert payload["skill"] == "plugin:mempalace-dreaming"
+    assert payload["skill"] == "mempalace-dreaming:mempalace-dreaming"
     assert payload["report_only"] is True
     # No cron is created: the payload must say so explicitly.
     assert "cron" in json.dumps(payload).lower()

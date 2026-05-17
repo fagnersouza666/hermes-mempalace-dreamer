@@ -125,7 +125,7 @@ Implemented:
   - `memory.user_profile_enabled true`
   - `memory.provider mempalace`
   - `plugins.mempalace_dreaming.enabled true`
-  - `plugins.mempalace_dreaming.skill plugin:mempalace-dreaming`
+  - `plugins.mempalace_dreaming.skill mempalace-dreaming:mempalace-dreaming`
 - rollback notes printed in the JSON result;
 - no destructive cleanup, no Obsidian writes, no memory writes.
 

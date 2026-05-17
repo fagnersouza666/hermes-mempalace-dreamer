@@ -235,7 +235,7 @@ def test_doctor_success_path_ok_true(tmp_path):
     assert report["ok"] is True
     assert report["warnings"] == []
     assert report["plugin"] == "mempalace-dreaming"
-    assert report["version"] == "1.0.0"
+    assert report["version"] == "1.0.1"
     assert "checks" in report
     assert "recommendations" in report
     # JSON-serializable
@@ -711,7 +711,7 @@ def _write_live_config(tmp_path, overrides=None):
         "plugins": {
             "mempalace-dreaming": {
                 "enabled": True,
-                "skill": "plugin:mempalace-dreaming",
+                "skill": "mempalace-dreaming:mempalace-dreaming",
             }
         },
     }
