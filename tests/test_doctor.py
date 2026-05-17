@@ -392,6 +392,12 @@ ID    NAME                          SCHEDULE         STATUS
 2     Sonhos diários MemPalace      30 05 * * *      active
 """
 
+CRON_LIST_DAILY_PLUS_WEEKLY_LEAN_CHECK = """\
+ID    NAME                                   SCHEDULE         STATUS
+1     mempalace-dreaming-daily               30 08 * * *      active
+2     mempalace-dreaming-weekly-lean-check   30 06 * * 0      active
+"""
+
 
 def test_doctor_duplicate_dreaming_jobs(tmp_path):
     module = load_plugin()
@@ -401,6 +407,21 @@ def test_doctor_duplicate_dreaming_jobs(tmp_path):
     assert cron["duplicate_dreaming_jobs"] is True
     assert report["ok"] is False
     assert any("duplicate" in w.lower() or "duplicado" in w.lower() for w in report["warnings"])
+
+
+def test_doctor_weekly_lean_check_is_not_treated_as_duplicate_daily_job(tmp_path):
+    module = load_plugin()
+    run_fn = _build_all_green_runner(
+        tmp_path,
+        cron_stdout=CRON_LIST_DAILY_PLUS_WEEKLY_LEAN_CHECK,
+    )
+    report = module.build_doctor_report(str(tmp_path), run_fn=run_fn)
+    cron = report["checks"]["cron"]
+    assert cron["duplicate_dreaming_jobs"] is False
+    assert [j["name"] for j in cron["daily_duplicate_candidates"]] == [
+        "mempalace-dreaming-daily"
+    ]
+    assert report["ok"] is True
 
 
 # ---------------------------------------------------------------------------

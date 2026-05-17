@@ -876,6 +876,36 @@ def _is_dreaming_job(name: str) -> bool:
     return bool(_DREAMING_RE.search(name))
 
 
+def _load_lean_check_job_name() -> str | None:
+    """Resolve ``LEAN_CHECK_JOB_NAME`` without relying on package import state."""
+
+    try:
+        from mempalace_dreaming.setup import LEAN_CHECK_JOB_NAME
+
+        return LEAN_CHECK_JOB_NAME
+    except ImportError:
+        pass
+
+    import importlib.util
+    import sys
+
+    setup_path = PLUGIN_DIR / "mempalace_dreaming" / "setup.py"
+    if not setup_path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location(
+        "mempalace_dreaming_setup", setup_path
+    )
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:  # noqa: BLE001 - doctor must never raise
+        return None
+    return getattr(module, "LEAN_CHECK_JOB_NAME", None)
+
+
 def _parse_cron_blocks(stdout: str) -> list[dict]:
     """Parse the real multi-line ``hermes cron list`` block format.
 
@@ -1087,6 +1117,7 @@ def build_doctor_report(
     """
     hermes_home = hermes_home or _default_hermes_home()
     schedule_job_name = _load_schedule_job_name()
+    lean_check_job_name = _load_lean_check_job_name()
 
     home = Path(hermes_home).expanduser()
     warnings: list[str] = []
@@ -1230,10 +1261,15 @@ def build_doctor_report(
     cron_jobs = _parse_cron_jobs(cron_res.get("stdout", ""))
 
     dreaming_jobs = [j for j in cron_jobs if _is_dreaming_job(j.get("name", ""))]
+    duplicate_candidates = [
+        j
+        for j in dreaming_jobs
+        if j.get("name") != lean_check_job_name
+    ]
     daily_job_present = schedule_job_name is not None and any(
         j["name"] == schedule_job_name for j in dreaming_jobs
     )
-    duplicate_dreaming_jobs = len(dreaming_jobs) > 1
+    duplicate_dreaming_jobs = len(duplicate_candidates) > 1
 
     if schedule_job_name is None:
         warnings.append(
@@ -1251,7 +1287,7 @@ def build_doctor_report(
             f"run: hermes mempalace-dreaming setup --apply --schedule-dreaming --create-cron"
         )
     if duplicate_dreaming_jobs:
-        dup_names = [j["name"] for j in dreaming_jobs]
+        dup_names = [j["name"] for j in duplicate_candidates]
         warnings.append(
             f"duplicate dreaming-like cron jobs detected: {dup_names!r}"
         )
@@ -1300,6 +1336,7 @@ def build_doctor_report(
     cron_check: dict[str, Any] = {
         "daily_job_present": daily_job_present,
         "dreaming_jobs": dreaming_jobs,
+        "daily_duplicate_candidates": duplicate_candidates,
         "duplicate_dreaming_jobs": duplicate_dreaming_jobs,
         "schedule_mismatch": schedule_mismatch,
     }
