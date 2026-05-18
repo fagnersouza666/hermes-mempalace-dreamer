@@ -194,6 +194,24 @@ def test_cli_apply_from_args_injects_side_effects(tmp_path):
     assert all(isinstance(argv, list) for argv in rec.runs)
 
 
+def test_cli_apply_from_args_supports_extraction_profile_mode(tmp_path):
+    module = load_plugin()
+    parser = argparse.ArgumentParser()
+    module._setup_cli_parser(parser)
+    args = parser.parse_args(
+        ['setup', '--hermes-home', str(tmp_path), '--apply', '--profile-mode', 'extraction']
+    )
+    rec = Recorder()
+
+    result = module._apply_setup_from_args(
+        args, mkdir_fn=rec.mkdir, run_fn=rec.run
+    )
+
+    assert result.applied is True
+    assert ['hermes', 'config', 'set', 'memory.memory_enabled', 'false'] in rec.runs
+    assert ['hermes', 'config', 'set', 'memory.user_profile_enabled', 'false'] in rec.runs
+
+
 # --- robust plugin import (no repo root on sys.path) ----------------------
 
 

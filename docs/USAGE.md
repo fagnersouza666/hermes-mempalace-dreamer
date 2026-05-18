@@ -59,6 +59,12 @@ optional schedule). Never applies anything. With `--schedule-dreaming` the
 UTC-converted `cron_utc` (see
 [Timezone-aware scheduling](#timezone-aware-scheduling)).
 
+`--profile-mode interactive` is the default: it keeps built-in memory and user
+profile enabled in that Hermes profile. `--profile-mode extraction` is for a
+stock-core split-profile design: it still sets `memory.provider=mempalace`, but
+disables `memory.memory_enabled` and `memory.user_profile_enabled` in that
+profile so extraction/cron behavior lives in config + plugin space.
+
 ### `setup` — dry-run by default, opt-in apply
 
 ```bash
@@ -67,6 +73,7 @@ hermes mempalace-dreaming setup --install-provider                 # dry-run pla
 hermes mempalace-dreaming setup --apply --install-provider         # copy provider bundle + install mempalace CLI (auto strategy)
 hermes mempalace-dreaming setup --apply --install-provider --install-method pipx     # pin the install tool (uv|pipx|pip-user)
 hermes mempalace-dreaming setup --apply                            # create dirs + run config commands
+hermes mempalace-dreaming setup --apply --profile-mode extraction  # stock-core split profile: provider on, built-in memory/user profile off
 hermes mempalace-dreaming setup --apply --schedule-dreaming --create-cron        # also create the daily cron
 hermes mempalace-dreaming setup --apply --schedule-lean-check --create-lean-check-cron   # also create the weekly lean-check cron
 hermes mempalace-dreaming setup --apply --verify-after-apply       # apply, then read-only verify
@@ -180,6 +187,7 @@ about "local time", scheduling is timezone-aware:
 ```bash
 hermes mempalace-dreaming doctor
 hermes mempalace-dreaming doctor --hermes-home ~/.hermes
+hermes mempalace-dreaming doctor --profile-mode extraction
 hermes mempalace-dreaming doctor --expected-time 08:30 --timezone America/Sao_Paulo
 ```
 
@@ -195,9 +203,9 @@ carries `ok`, `warnings`, `recommendations`, and `checks`.
 
 1. **Plugin presence** — whether the bundled skill file, `mempalace_dreaming.engine`, and `mempalace_dreaming.setup` are present on disk.
 2. **Memory / Hermes CLI** — whether `hermes --version` succeeds (CLI callable) and `hermes memory status` returns a `mempalace` provider.
-3. **Config coherence** — resolves the config file with `hermes config path`, reads and parses that YAML file (read-only, with `_`/`-` key-name tolerance), and checks these keys:
-   - `memory.memory_enabled` (expect truthy)
-   - `memory.user_profile_enabled` (expect truthy)
+3. **Config coherence** — resolves the config file with `hermes config path`, reads and parses that YAML file (read-only, with `_`/`-` key-name tolerance), and checks these keys. By default doctor auto-detects the profile shape from the live config; pass `--profile-mode interactive|extraction` to force the expectation explicitly:
+   - `memory.memory_enabled` (expect truthy in `interactive`, falsy in `extraction`)
+   - `memory.user_profile_enabled` (expect truthy in `interactive`, falsy in `extraction`)
    - `memory.provider` (expect `"mempalace"`)
    - `plugins.mempalace_dreaming.enabled` (expect truthy)
    - `plugins.mempalace_dreaming.skill` (expect `"mempalace-dreaming:mempalace-dreaming"`)
@@ -253,6 +261,7 @@ memory or file writes.
 ```bash
 hermes mempalace-dreaming repair-plan
 hermes mempalace-dreaming repair-plan --hermes-home ~/.hermes
+hermes mempalace-dreaming repair-plan --profile-mode extraction
 hermes mempalace-dreaming repair-plan --expected-time 08:30 --timezone America/Sao_Paulo
 ```
 

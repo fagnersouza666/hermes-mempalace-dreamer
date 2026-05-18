@@ -25,6 +25,11 @@ VerifyRunFn = Callable[[Sequence[str]], dict]
 #: when no ``--timezone`` is given the requested time is treated as UTC --
 #: never silently as "local time".
 DEFAULT_TIMEZONE = "UTC"
+PROFILE_MODE_INTERACTIVE = "interactive"
+PROFILE_MODE_EXTRACTION = "extraction"
+PROFILE_MODE_AUTO = "auto"
+PROFILE_MODES = (PROFILE_MODE_INTERACTIVE, PROFILE_MODE_EXTRACTION)
+PROFILE_MODES_WITH_AUTO = (PROFILE_MODE_AUTO,) + PROFILE_MODES
 
 #: Fixed reference date used to resolve a timezone's UTC offset. A daily cron
 #: fires at one fixed UTC instant; for zones that observe DST the local run
@@ -375,7 +380,39 @@ def _build_lean_check_schedule(
     return schedule
 
 
-def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE, install_provider: bool = False, install_method: str = "auto", schedule_lean_check: bool = False, lean_check_time: str = "06:30", lean_check_weekday: int = _LEAN_CHECK_DEFAULT_WEEKDAY) -> dict[str, Any]:
+def _normalize_profile_mode(profile_mode: str, *, allow_auto: bool = False) -> str:
+    normalized = str(profile_mode).strip().lower()
+    allowed = PROFILE_MODES_WITH_AUTO if allow_auto else PROFILE_MODES
+    if normalized not in allowed:
+        expected = ", ".join(allowed)
+        raise ValueError(f"invalid profile_mode {profile_mode!r}; expected one of: {expected}")
+    return normalized
+
+
+def _build_profile_config(profile_mode: str) -> dict[str, object]:
+    mode = _normalize_profile_mode(profile_mode)
+    return {
+        "memory.memory_enabled": mode == PROFILE_MODE_INTERACTIVE,
+        "memory.user_profile_enabled": mode == PROFILE_MODE_INTERACTIVE,
+        "memory.provider": "mempalace",
+        "plugins.mempalace_dreaming.enabled": True,
+        "plugins.mempalace_dreaming.skill": "mempalace-dreaming:mempalace-dreaming",
+    }
+
+
+def _infer_profile_mode_from_config(config_data: dict | None) -> str:
+    if not isinstance(config_data, dict):
+        return PROFILE_MODE_INTERACTIVE
+    found_memory, memory_enabled = _lookup_dotted(config_data, "memory.memory_enabled")
+    found_profile, user_profile_enabled = _lookup_dotted(
+        config_data, "memory.user_profile_enabled"
+    )
+    if found_memory and found_profile and not bool(memory_enabled) and not bool(user_profile_enabled):
+        return PROFILE_MODE_EXTRACTION
+    return PROFILE_MODE_INTERACTIVE
+
+
+def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, time: str = "05:30", timezone: str = DEFAULT_TIMEZONE, install_provider: bool = False, install_method: str = "auto", schedule_lean_check: bool = False, lean_check_time: str = "06:30", lean_check_weekday: int = _LEAN_CHECK_DEFAULT_WEEKDAY, profile_mode: str = PROFILE_MODE_INTERACTIVE) -> dict[str, Any]:
     """Return an idempotent setup plan without applying it.
 
     The real installer can consume this structure to print a diff, create
@@ -383,18 +420,14 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
     Keeping this pure makes it testable and safe.
     """
     home = Path(hermes_home).expanduser()
+    resolved_profile_mode = _normalize_profile_mode(profile_mode)
     plan: dict[str, Any] = {
+        "profile_mode": resolved_profile_mode,
         "directories": [
             str(home / "mempalace" / "palace"),
             str(home / "mempalace" / "hermes-corpus"),
         ],
-        "config": {
-            "memory.memory_enabled": True,
-            "memory.user_profile_enabled": True,
-            "memory.provider": "mempalace",
-            "plugins.mempalace_dreaming.enabled": True,
-            "plugins.mempalace_dreaming.skill": "mempalace-dreaming:mempalace-dreaming",
-        },
+        "config": _build_profile_config(resolved_profile_mode),
         "skill": {
             "name": "mempalace-dreaming",
             "qualified_name": "mempalace-dreaming:mempalace-dreaming",
@@ -402,6 +435,7 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
         },
         "notes": [
             "Bootstrap the real MemPalace provider explicitly with 'setup --apply --install-provider' (opt-in), or install/enable a MemoryProvider separately.",
+            f"Profile mode: {resolved_profile_mode}. Interactive mode keeps built-in memory/user profile on; extraction mode keeps the Hermes core stock and disables those built-ins in this profile.",
             "Restart Hermes or start a fresh session after config changes.",
             "Dreaming cron is opt-in; daily automation must be conservative and report-first.",
         ],
@@ -662,6 +696,16 @@ def _setup_cli_parser(parser) -> None:
         ),
     )
     plan.add_argument(
+        "--profile-mode",
+        choices=PROFILE_MODES,
+        default=PROFILE_MODE_INTERACTIVE,
+        help=(
+            "Config target: 'interactive' keeps built-in memory/user-profile "
+            "enabled in this profile; 'extraction' disables those built-ins "
+            "for a stock-core split-profile setup."
+        ),
+    )
+    plan.add_argument(
         "--schedule-lean-check",
         action="store_true",
         help="Include the weekly live-provider lean-check cron plan (report-only)",
@@ -727,6 +771,16 @@ def _setup_cli_parser(parser) -> None:
             "'auto' tries uv -> pipx -> pip-user (first that succeeds wins), "
             "or pin 'uv' / 'pipx' / 'pip-user'. Exposed in the result JSON "
             "(default: auto)."
+        ),
+    )
+    setup.add_argument(
+        "--profile-mode",
+        choices=PROFILE_MODES,
+        default=PROFILE_MODE_INTERACTIVE,
+        help=(
+            "Config target: 'interactive' keeps built-in memory/user-profile "
+            "enabled in this profile; 'extraction' disables those built-ins "
+            "for a stock-core split-profile setup."
         ),
     )
     setup.add_argument(
@@ -801,6 +855,16 @@ def _setup_cli_parser(parser) -> None:
         default=None,
         help="IANA timezone for --expected-time conversion (omit to skip schedule comparison)",
     )
+    doctor.add_argument(
+        "--profile-mode",
+        choices=PROFILE_MODES_WITH_AUTO,
+        default=PROFILE_MODE_AUTO,
+        help=(
+            "Expected config shape: 'auto' infers from the live config; "
+            "'interactive' expects built-in memory/user-profile enabled; "
+            "'extraction' expects them disabled in this profile."
+        ),
+    )
     doctor.set_defaults(func=_handle_cli)
 
     repair_plan = sub.add_parser(
@@ -819,6 +883,16 @@ def _setup_cli_parser(parser) -> None:
         "--timezone",
         default=None,
         help="IANA timezone for --expected-time conversion (omit to skip schedule comparison)",
+    )
+    repair_plan.add_argument(
+        "--profile-mode",
+        choices=PROFILE_MODES_WITH_AUTO,
+        default=PROFILE_MODE_AUTO,
+        help=(
+            "Expected config shape: 'auto' infers from the live config; "
+            "'interactive' expects built-in memory/user-profile enabled; "
+            "'extraction' expects them disabled in this profile."
+        ),
     )
     repair_plan.set_defaults(func=_handle_cli)
 
@@ -1098,6 +1172,7 @@ def build_doctor_report(
     run_fn: VerifyRunFn = _default_verify_run,
     expected_time: str | None = None,
     timezone: str | None = None,
+    profile_mode: str = PROFILE_MODE_AUTO,
 ) -> dict[str, Any]:
     """Read-only operational audit of the MemPalace Dreaming installation.
 
@@ -1118,6 +1193,7 @@ def build_doctor_report(
     hermes_home = hermes_home or _default_hermes_home()
     schedule_job_name = _load_schedule_job_name()
     lean_check_job_name = _load_lean_check_job_name()
+    requested_profile_mode = _normalize_profile_mode(profile_mode, allow_auto=True)
 
     home = Path(hermes_home).expanduser()
     warnings: list[str] = []
@@ -1184,21 +1260,6 @@ def build_doctor_report(
     # ------------------------------------------------------------------
     # 3. Config coherence
     # ------------------------------------------------------------------
-    expected_config: dict[str, object] = {
-        "memory.memory_enabled": True,
-        "memory.user_profile_enabled": True,
-        "memory.provider": "mempalace",
-        "plugins.mempalace_dreaming.enabled": True,
-        "plugins.mempalace_dreaming.skill": "mempalace-dreaming:mempalace-dreaming",
-    }
-    expected_desc: dict[str, str] = {
-        "memory.memory_enabled": "truthy",
-        "memory.user_profile_enabled": "truthy",
-        "memory.provider": '"mempalace"',
-        "plugins.mempalace_dreaming.enabled": "truthy",
-        "plugins.mempalace_dreaming.skill": '"mempalace-dreaming:mempalace-dreaming"',
-    }
-
     config_checks: dict[str, Any] = {}
     config_coherent = True
 
@@ -1214,6 +1275,25 @@ def build_doctor_report(
         )
     else:
         config_data, config_error = _read_hermes_config(path_res.get("stdout", ""))
+
+    detected_profile_mode = _infer_profile_mode_from_config(config_data)
+    resolved_profile_mode = (
+        detected_profile_mode
+        if requested_profile_mode == PROFILE_MODE_AUTO
+        else requested_profile_mode
+    )
+    expected_config = _build_profile_config(resolved_profile_mode)
+    expected_desc: dict[str, str] = {
+        "memory.memory_enabled": "truthy"
+        if resolved_profile_mode == PROFILE_MODE_INTERACTIVE
+        else "falsy",
+        "memory.user_profile_enabled": "truthy"
+        if resolved_profile_mode == PROFILE_MODE_INTERACTIVE
+        else "falsy",
+        "memory.provider": '"mempalace"',
+        "plugins.mempalace_dreaming.enabled": "truthy",
+        "plugins.mempalace_dreaming.skill": '"mempalace-dreaming:mempalace-dreaming"',
+    }
 
     if config_error is not None:
         config_coherent = False
@@ -1232,7 +1312,7 @@ def build_doctor_report(
         if not found:
             ok_val = False
         elif isinstance(exp, bool):
-            ok_val = bool(parsed)
+            ok_val = bool(parsed) is exp
         else:
             ok_val = str(parsed).strip().lower() == str(exp).strip().lower()
         config_checks[key] = {
@@ -1253,6 +1333,9 @@ def build_doctor_report(
                 recommendations.append(f"run: hermes config set {key} {exp}")
 
     config_checks["config_coherent"] = config_coherent
+    config_checks["requested_profile_mode"] = requested_profile_mode
+    config_checks["detected_profile_mode"] = detected_profile_mode
+    config_checks["resolved_profile_mode"] = resolved_profile_mode
 
     # ------------------------------------------------------------------
     # 4. Cron inspection
@@ -1380,6 +1463,7 @@ def build_doctor_report(
             "memory_status_ok": memory_status_ok,
             "memory_provider": memory_provider,
             "provider_is_mempalace": provider_is_mempalace,
+            "profile_mode": resolved_profile_mode,
             "config": config_checks,
             "cron": cron_check,
         },
@@ -1411,6 +1495,7 @@ def build_repair_plan(
     run_fn: VerifyRunFn = _default_verify_run,
     expected_time: str | None = None,
     timezone: str | None = None,
+    profile_mode: str = PROFILE_MODE_AUTO,
 ) -> dict[str, Any]:
     """Turn ``doctor`` findings into an explicit, report-only repair plan.
 
@@ -1428,8 +1513,10 @@ def build_repair_plan(
         run_fn=run_fn,
         expected_time=expected_time,
         timezone=timezone,
+        profile_mode=profile_mode,
     )
     checks = doctor.get("checks", {})
+    doctor_profile_mode = checks.get("profile_mode", PROFILE_MODE_INTERACTIVE)
     repairs: list[dict[str, Any]] = []
 
     def add(
@@ -1560,7 +1647,7 @@ def build_repair_plan(
             "the daily dreaming cron job is not present",
             "create the daily dreaming cron via the documented setup flow",
             "hermes mempalace-dreaming setup --apply --schedule-dreaming "
-            "--create-cron",
+            f"--create-cron --profile-mode {doctor_profile_mode}",
         )
     if cron.get("duplicate_dreaming_jobs") is True:
         dup_names = [j.get("name", "") for j in cron.get("dreaming_jobs", [])]
@@ -1585,7 +1672,8 @@ def build_repair_plan(
         if expected_time is not None and timezone is not None:
             preview = (
                 "hermes mempalace-dreaming setup --apply --schedule-dreaming "
-                f"--create-cron --time {expected_time} --timezone {timezone}"
+                f"--create-cron --time {expected_time} --timezone {timezone} "
+                f"--profile-mode {doctor_profile_mode}"
             )
         add(
             "align-cron-schedule",
@@ -1755,6 +1843,7 @@ def _apply_setup_from_args(
         lean_check_weekday=getattr(
             args, "lean_check_weekday", _LEAN_CHECK_DEFAULT_WEEKDAY
         ),
+        profile_mode=getattr(args, "profile_mode", PROFILE_MODE_INTERACTIVE),
     )
     if verify_fn is None:
         def verify_fn() -> dict:
@@ -1892,6 +1981,7 @@ def _handle_cli(args) -> None:
             hermes_home=getattr(args, "hermes_home", "~/.hermes"),
             expected_time=getattr(args, "expected_time", None),
             timezone=getattr(args, "timezone", None),
+            profile_mode=getattr(args, "profile_mode", PROFILE_MODE_AUTO),
         )
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return
@@ -1900,6 +1990,7 @@ def _handle_cli(args) -> None:
             hermes_home=getattr(args, "hermes_home", "~/.hermes"),
             expected_time=getattr(args, "expected_time", None),
             timezone=getattr(args, "timezone", None),
+            profile_mode=getattr(args, "profile_mode", PROFILE_MODE_AUTO),
         )
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return
@@ -1935,6 +2026,7 @@ def _handle_cli(args) -> None:
             lean_check_weekday=getattr(
                 args, "lean_check_weekday", _LEAN_CHECK_DEFAULT_WEEKDAY
             ),
+            profile_mode=getattr(args, "profile_mode", PROFILE_MODE_INTERACTIVE),
         )
         print(json.dumps(plan, indent=2, ensure_ascii=False))
 

@@ -137,7 +137,13 @@ Once published and supported by your Hermes version:
 hermes plugins install fagnersouza666/hermes-mempalace-dreamer --enable
 hermes mempalace-dreaming setup-plan --schedule-dreaming --install-provider
 hermes mempalace-dreaming setup --apply --install-provider --verify-after-apply
+hermes mempalace-dreaming setup --apply --profile-mode extraction --install-provider
 ```
+
+For stock-core split-profile setups, use `--profile-mode extraction` in the
+cron/extraction profile. That keeps `memory.provider=mempalace` but disables
+`memory.memory_enabled` and `memory.user_profile_enabled` in that profile, so
+custom behavior stays in config/plugin space instead of patching Hermes core.
 
 For local development:
 
