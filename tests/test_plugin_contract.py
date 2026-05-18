@@ -59,6 +59,19 @@ def test_setup_plan_is_dry_run_safe(tmp_path):
     assert all(str(tmp_path) in p for p in plan['directories'])
 
 
+def test_setup_plan_supports_extraction_profile_mode(tmp_path):
+    module = load_plugin()
+    plan = module.build_setup_plan(
+        hermes_home=tmp_path,
+        profile_mode='extraction',
+    )
+    assert plan['profile_mode'] == 'extraction'
+    assert plan['config']['memory.provider'] == 'mempalace'
+    assert plan['config']['memory.memory_enabled'] is False
+    assert plan['config']['memory.user_profile_enabled'] is False
+    assert any('stock' in note.lower() for note in plan['notes'])
+
+
 def test_cli_setup_plan_prints_json(capsys, tmp_path):
     import argparse
     import json

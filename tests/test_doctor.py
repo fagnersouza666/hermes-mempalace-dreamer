@@ -382,6 +382,29 @@ def test_doctor_config_incoherent_memory_disabled(tmp_path):
     assert report["recommendations"]
 
 
+def test_doctor_extraction_profile_mode_accepts_memory_builtins_disabled(tmp_path):
+    module = load_plugin()
+    run_fn = _build_all_green_runner(
+        tmp_path,
+        config_overrides={
+            "memory.memory_enabled": "false",
+            "memory.user_profile_enabled": "false",
+        },
+    )
+    report = module.build_doctor_report(
+        str(tmp_path),
+        run_fn=run_fn,
+        profile_mode="extraction",
+    )
+    config_checks = report["checks"]["config"]
+    assert report["ok"] is True
+    assert report["checks"]["profile_mode"] == "extraction"
+    assert config_checks["config_coherent"] is True
+    assert config_checks["memory.memory_enabled"]["ok"] is True
+    assert config_checks["memory.user_profile_enabled"]["ok"] is True
+    assert config_checks["resolved_profile_mode"] == "extraction"
+
+
 # ---------------------------------------------------------------------------
 # Duplicate detection
 # ---------------------------------------------------------------------------
