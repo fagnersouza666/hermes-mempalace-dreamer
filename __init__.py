@@ -194,7 +194,7 @@ def _provider_install_argv(method: str) -> list[str]:
     raise ValueError(f"unknown provider install method: {method!r}")
 
 PLUGIN_NAME = "mempalace-dreaming"
-PLUGIN_VERSION = "1.0.1"
+PLUGIN_VERSION = "1.1.0"
 PLUGIN_STATUS = "production-ready bootstrap v1.0"
 
 
@@ -438,6 +438,7 @@ def build_setup_plan(hermes_home: str | Path, schedule_dreaming: bool = False, t
             f"Profile mode: {resolved_profile_mode}. Interactive mode keeps built-in memory/user profile on; extraction mode keeps the Hermes core stock and disables those built-ins in this profile.",
             "Restart Hermes or start a fresh session after config changes.",
             "Dreaming cron is opt-in; daily automation must be conservative and report-first.",
+            "Do NOT schedule built-in short-memory (MEMORY.md/USER.md) cleanup as a cron job: Hermes cron sessions run with skip_memory=True, so the memory tool is unavailable and the job claims success without effect (upstream NousResearch/hermes-agent#9763). Run that cleanup interactively; `doctor` detects and reports such jobs.",
         ],
     }
     if schedule_dreaming:
@@ -912,6 +913,36 @@ def _setup_cli_parser(parser) -> None:
     )
     lean_check.set_defaults(func=_handle_cli)
 
+    corpus_cleanup = sub.add_parser(
+        "corpus-cleanup",
+        help=(
+            "Plan (default, dry-run) or --apply a duplicate/noise cleanup of "
+            "an existing corpus; apply MOVES files to a backup, never deletes"
+        ),
+    )
+    corpus_cleanup.add_argument(
+        "--corpus-path",
+        required=True,
+        help="Corpus directory to clean (its turns/ subdirectory is scanned)",
+    )
+    corpus_cleanup.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "Move the planned files into the backup directory and rebuild "
+            "the dedup index (default is a read-only dry-run plan)"
+        ),
+    )
+    corpus_cleanup.add_argument(
+        "--backup-dir",
+        default=None,
+        help=(
+            "Backup directory for moved files "
+            "(default: <corpus>/cleanup-backup-<UTC stamp>/)"
+        ),
+    )
+    corpus_cleanup.set_defaults(func=_handle_cli)
+
     integration = sub.add_parser(
         "integration-report",
         help="Report-only REM-style integration analysis (no writes)",
@@ -948,6 +979,82 @@ _CRON_BLOCK_SCHED_RE = re.compile(r"^\s*schedule\s*[:=]\s*(.+?)\s*$", re.IGNOREC
 def _is_dreaming_job(name: str) -> bool:
     """True when the job name looks dreaming-related."""
     return bool(_DREAMING_RE.search(name))
+
+
+# --- Unsupported built-in short-memory cleanup cron (upstream #9763) -------
+#
+# The Hermes core cron scheduler creates agents with ``skip_memory=True``
+# (cron/scheduler.py: "Cron system prompts would corrupt user
+# representations"), so neither the built-in memory store nor the ``memory``
+# tool is available in a cron session. A cron job that asks the agent to
+# clean the built-in short memory (MEMORY.md / USER.md via
+# ``memory(action=...)``) therefore silently does nothing while the job
+# still reports "ok". Tracked upstream as NousResearch/hermes-agent#9763;
+# this plugin only detects and reports it — it never patches Hermes core.
+
+_SHORT_MEMORY_TARGET_RE = re.compile(
+    r"mem[óo]ria\s+curta|short[\s-]?(?:term\s+)?memory|"
+    r"\bMEMORY\.md\b|\bUSER\.md\b|memory\s*\(\s*action",
+    re.IGNORECASE,
+)
+_SHORT_MEMORY_CLEANUP_RE = re.compile(
+    r"limp|clean|remov|compact|apag|delet|prune",
+    re.IGNORECASE,
+)
+
+SHORT_MEMORY_CLEANUP_LIMITATION = (
+    "Hermes cron sessions run with skip_memory=True, so the built-in "
+    "memory store and the memory tool are unavailable in cron jobs; a "
+    "scheduled built-in short-memory cleanup cannot work and will claim "
+    "success without effect (upstream NousResearch/hermes-agent#9763)."
+)
+
+
+def _detect_short_memory_cleanup_jobs(jobs: list) -> list[dict[str, Any]]:
+    """Return enabled agent cron jobs that target built-in short-memory
+    cleanup (unsupported upstream, #9763).
+
+    A job is flagged when it runs an agent (not a ``no_agent`` script), is
+    enabled, and its prompt+name mention both a built-in short-memory
+    target (memória curta / MEMORY.md / USER.md / memory(action=...)) and a
+    cleanup intent (limpar/clean/remove/compact/...). Pure and tolerant:
+    malformed entries are skipped, never raised on.
+    """
+    flagged: list[dict[str, Any]] = []
+    for job in jobs or []:
+        if not isinstance(job, dict):
+            continue
+        if job.get("no_agent"):
+            continue
+        if job.get("enabled") is False:
+            continue
+        text = f"{job.get('name', '')}\n{job.get('prompt', '')}"
+        if _SHORT_MEMORY_TARGET_RE.search(text) and _SHORT_MEMORY_CLEANUP_RE.search(text):
+            flagged.append(
+                {"id": str(job.get("id", "")), "name": str(job.get("name", ""))}
+            )
+    return flagged
+
+
+def _read_cron_jobs_file(home: Path) -> tuple[list, str | None]:
+    """Read ``<home>/cron/jobs.json`` read-only, never raising.
+
+    Returns ``(jobs, None)`` on success, ``([], None)`` when the file does
+    not exist (nothing scheduled — not an error), or ``([], reason)`` when
+    it exists but cannot be read/parsed.
+    """
+    path = home / "cron" / "jobs.json"
+    if not path.is_file():
+        return ([], None)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return ([], f"could not read cron jobs.json at {str(path)!r}: {exc}")
+    if isinstance(data, list):
+        return (data, None)
+    if isinstance(data, dict) and isinstance(data.get("jobs"), list):
+        return (data["jobs"], None)
+    return ([], f"unexpected cron jobs.json shape at {str(path)!r}")
 
 
 def _load_lean_check_job_name() -> str | None:
@@ -1378,6 +1485,31 @@ def build_doctor_report(
             "run `hermes cron list` and remove the duplicate/legacy job by id"
         )
 
+    # Unsupported built-in short-memory cleanup cron (upstream #9763).
+    # Read-only inspection of <home>/cron/jobs.json — the `hermes cron list`
+    # output does not carry prompts, so the jobs file is the honest source.
+    raw_jobs, jobs_file_error = _read_cron_jobs_file(home)
+    short_memory_cleanup_jobs = _detect_short_memory_cleanup_jobs(raw_jobs)
+    if jobs_file_error is not None:
+        warnings.append(jobs_file_error)
+        recommendations.append(
+            "verify that $HERMES_HOME/cron/jobs.json is readable JSON"
+        )
+    if short_memory_cleanup_jobs:
+        names = [j["name"] for j in short_memory_cleanup_jobs]
+        warnings.append(
+            f"cron job(s) {names!r} target built-in short-memory cleanup, "
+            "which is unsupported upstream (#9763): cron sessions run with "
+            "skip_memory=True, so the memory tool is unavailable and the "
+            "job reports ok without cleaning anything"
+        )
+        recommendations.append(
+            "pause or remove the short-memory cleanup cron (find its id via "
+            "`hermes cron list`) and run the cleanup in an interactive "
+            "(interativa) session instead, until "
+            "NousResearch/hermes-agent#9763 is fixed upstream"
+        )
+
     # ------------------------------------------------------------------
     # 5. Expected schedule comparison
     # ------------------------------------------------------------------
@@ -1421,6 +1553,8 @@ def build_doctor_report(
         "dreaming_jobs": dreaming_jobs,
         "daily_duplicate_candidates": duplicate_candidates,
         "duplicate_dreaming_jobs": duplicate_dreaming_jobs,
+        "short_memory_cleanup_jobs": short_memory_cleanup_jobs,
+        "short_memory_cleanup_unsupported": bool(short_memory_cleanup_jobs),
         "schedule_mismatch": schedule_mismatch,
     }
     if expected_cron_utc is not None:
@@ -1444,6 +1578,7 @@ def build_doctor_report(
         and config_coherent
         and daily_job_present
         and not duplicate_dreaming_jobs
+        and not short_memory_cleanup_jobs
         and schedule_mismatch is not True
     )
 
@@ -1659,6 +1794,23 @@ def build_repair_plan(
             "run `hermes cron list`, identify the duplicate/legacy job by "
             "its id, then remove it manually — the id is never inferred or "
             "invented here",
+            "hermes cron list",
+        )
+    if cron.get("short_memory_cleanup_jobs"):
+        names = [j.get("name", "") for j in cron["short_memory_cleanup_jobs"]]
+        add(
+            "unsupported-short-memory-cleanup-cron",
+            "medium",
+            "cron",
+            f"cron job(s) {names!r} target built-in short-memory cleanup, "
+            "which cannot work in cron sessions (upstream "
+            "NousResearch/hermes-agent#9763: cron runs with "
+            "skip_memory=True, so the memory tool is unavailable); the job "
+            "reports ok without cleaning anything",
+            "pause or remove the job manually (its id comes from "
+            "`hermes cron list`, never inferred here) and run the built-in "
+            "short-memory cleanup in an interactive session; do not patch "
+            "Hermes core — the defect is tracked upstream as #9763",
             "hermes cron list",
         )
     if cron.get("schedule_mismatch") is True:
@@ -1920,6 +2072,31 @@ def _load_build_integration_report():
         return module.build_integration_report
 
 
+def _load_cleanup_module():
+    """Resolve ``mempalace_dreaming.cleanup`` without depending on ``sys.path``.
+
+    Mirrors :func:`_load_build_lean_check_report`.
+    """
+    try:
+        from mempalace_dreaming import cleanup
+
+        return cleanup
+    except ImportError:
+        import importlib.util
+        import sys
+
+        cleanup_path = PLUGIN_DIR / "mempalace_dreaming" / "cleanup.py"
+        spec = importlib.util.spec_from_file_location(
+            "mempalace_dreaming_cleanup", cleanup_path
+        )
+        if spec is None or spec.loader is None:  # pragma: no cover - defensive
+            raise
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+
 def _coerce_lean_check_inputs(data: object) -> list[object]:
     """Accept a JSON array of strings or ``{"text": ...}`` objects."""
     if isinstance(data, list):
@@ -2001,6 +2178,20 @@ def _handle_cli(args) -> None:
             candidates, extra_warnings=input_warnings
         )
         print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    if cmd == "corpus-cleanup":
+        cleanup = _load_cleanup_module()
+        plan = cleanup.build_corpus_cleanup_plan(
+            getattr(args, "corpus_path", "")
+        )
+        result = cleanup.apply_corpus_cleanup(
+            plan,
+            apply=getattr(args, "apply", False),
+            backup_dir=getattr(args, "backup_dir", None),
+        )
+        print(json.dumps(
+            {"plan": plan, "result": result}, indent=2, ensure_ascii=False
+        ))
         return
     if cmd == "integration-report":
         build_integration_report = _load_build_integration_report()

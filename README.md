@@ -38,8 +38,9 @@ Current implemented pieces:
   - `hermes mempalace-dreaming schedule-plan` (report-only JSON; never creates cron)
   - `hermes mempalace-dreaming lean-check` (report-only JSON; classifies local candidate material, no writes)
   - `hermes mempalace-dreaming integration-report` (report-only JSON; REM-style contradictions / supersede candidates / clusters; deterministic, no writes, no deletes)
-  - `hermes mempalace-dreaming doctor` (read-only operational audit: plugin presence, memory provider, config coherence, cron state, duplicate/timezone-drift detection; never mutates anything)
+  - `hermes mempalace-dreaming doctor` (read-only operational audit: plugin presence, memory provider, config coherence, cron state, duplicate/timezone-drift detection, and detection of the unsupported built-in short-memory cleanup cron — upstream NousResearch/hermes-agent#9763; never mutates anything)
   - `hermes mempalace-dreaming repair-plan` (report-only: turns doctor findings into an explicit, priority-ordered repair plan with command previews; never applies any fix)
+  - `hermes mempalace-dreaming corpus-cleanup` (dry-run plan of duplicate/cron/low-value turn files in an existing corpus; `--apply` MOVES them to a backup directory — never deletes — and rebuilds the dedup index; the palace is never touched)
 - Provides a dry-run setup planner:
   - `build_setup_plan(...)`
 - Provides an explicit apply layer:
@@ -152,6 +153,36 @@ git clone https://github.com/fagnersouza666/hermes-mempalace-dreamer.git
 cd hermes-mempalace-dreamer
 python3 -m pytest tests -q
 ```
+
+## Memory quality guards (v1.1.0)
+
+The bundled `mempalace` provider now protects corpus quality at ingestion
+time (see `CHANGELOG.md` for the full rationale):
+
+- **Cron/background sessions are never filed.** The Hermes core cron
+  scheduler hardcodes `agent_context="primary"` for every session
+  (upstream NousResearch/hermes-agent#9763), so the provider also honors
+  the reported platform (`sync_skip_platforms`, default `[cron]`), the
+  session-id prefix (`sync_skip_session_prefixes`, default `[cron_]`) and
+  the cron delivery wrapper in the message content. Primary Telegram/CLI
+  turns are unaffected.
+- **Low-value maintenance turns are dropped** (`sync_skip_low_value`):
+  `[SILENT]`, "Sem novos fatos duráveis", "Sem limpeza segura na memória
+  curta", dream/cleanup report wrappers.
+- **Cross-session normalized-content dedup** (`sync_dedup_enabled`): the
+  same content under a different session id is filed once, via an O(1)
+  atomic marker index safe under concurrent processes — no corpus scan
+  per turn. Materially different turns are always preserved.
+- **`corpus-cleanup`** migrates an already-polluted corpus: dry-run plan
+  by default; `--apply` moves files to a backup (never deletes) and
+  rebuilds the dedup index. The palace is never touched.
+
+**Known upstream limitation (#9763):** a cron job that tries to clean the
+built-in short memory (MEMORY.md/USER.md via `memory(action=...)`) cannot
+work — Hermes cron sessions run with `skip_memory=True`, so the memory
+tool is unavailable and the job reports "ok" without cleaning anything.
+`doctor` detects such jobs and reports them honestly; run that cleanup in
+an interactive session instead. This plugin never patches Hermes core.
 
 ## Current safety policy
 

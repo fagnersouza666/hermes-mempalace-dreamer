@@ -26,6 +26,10 @@ Config in $HERMES_HOME/config.yaml (profile-scoped):
       sync_enabled: true
       sync_min_chars: 80
       sync_max_chars: 12000
+      sync_skip_platforms: [cron]              # never file these platforms
+      sync_skip_session_prefixes: [cron_]      # never file these session ids
+      sync_skip_low_value: true                # drop [SILENT]/maintenance reports
+      sync_dedup_enabled: true                 # cross-session normalized dedup
       mine_lock_timeout_seconds: 5            # wait for cross-process mine lock
       auto_prefetch_enabled: true             # gate auto-recall on each turn
       prefetch_min_query_chars: 18            # skip shorter queries
@@ -77,6 +81,20 @@ _DEFAULTS: Dict[str, Any] = {
     "sync_enabled": True,
     "sync_min_chars": 80,
     "sync_max_chars": 12000,
+    # --- Background/cron ingestion guard ------------------------------------
+    # The Hermes core cron scheduler hardcodes agent_context="primary"
+    # (NousResearch/hermes-agent#9763), so agent_context alone cannot be
+    # trusted to keep cron/background sessions out of the corpus. Platform
+    # and session-id prefix are honored as independent signals; primary
+    # Telegram/CLI ingestion is unaffected.
+    "sync_skip_platforms": ["cron"],
+    "sync_skip_session_prefixes": ["cron_"],
+    # Drop low-value maintenance turns ([SILENT], "Sem novos fatos
+    # duráveis", dream/cleanup/doctor report wrappers) before filing.
+    "sync_skip_low_value": True,
+    # Cross-session dedup keyed by normalized content. O(1) marker lookups
+    # under <corpus>/turns/.dedup-index/ — never a corpus scan per turn.
+    "sync_dedup_enabled": True,
     # Seconds a mine will wait for the cross-process lock before giving up
     # (another process is mining and will pick up our files anyway). 0 = do
     # not wait, skip immediately if the lock is held.
@@ -150,6 +168,76 @@ _SECRET_PATTERNS = [
 
 def _looks_like_secret(text: str) -> bool:
     return any(p.search(text) for p in _SECRET_PATTERNS) if text else False
+
+
+# Agent contexts that must never file turns. The core documents
+# "primary" / "subagent" / "cron" / "flush"; anything non-primary is
+# background by definition.
+_PRIMARY_AGENT_CONTEXTS = ("primary", "")
+
+# The cron runner prepends this delivery wrapper to the prompt it hands the
+# agent. Its presence in the user content marks a cron/background session
+# even when platform/session_id/agent_context are all mis-reported
+# (belt-and-suspenders for NousResearch/hermes-agent#9763).
+_CRON_WRAPPER_MARKERS = (
+    re.compile(r"you are running as a scheduled cron job", re.IGNORECASE),
+    re.compile(r"respond with exactly \"?\[SILENT\]\"?", re.IGNORECASE),
+)
+
+# Low-value assistant replies: suppressed-delivery sentinels and the exact
+# "nothing to report" phrasings used by the maintenance crons. Matched
+# against the whole trimmed assistant content so a material turn that merely
+# *mentions* [SILENT] is preserved.
+_LOW_VALUE_ASSISTANT_PATTERNS = (
+    re.compile(r"^\[SILENT\]$", re.IGNORECASE),
+    re.compile(
+        r"^sem\s+novos\s+fatos\s+dur[áa]veis\b[^\n]{0,60}$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^sem\s+limpeza\s+segura\s+na\s+mem[óo]ria\s+curta\b[^\n]{0,60}$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^no\s+new\s+durable\s+facts\b[^\n]{0,60}$", re.IGNORECASE),
+    # Deterministic dream-report rendering (engine.render_report).
+    re.compile(r"^#\s*MemPalace Dream Report\b", re.IGNORECASE),
+    # Cron dreaming report wrapper: starts with the fixed first bullet.
+    re.compile(r"^-\s*mem[óo]rias\s+salvas\s*:", re.IGNORECASE),
+)
+
+# Cleanup-report bullets ("removi X / traduzi Y / compactei Z / eliminei
+# duplicação W"). A reply made only of these bullets is a repeated
+# maintenance report, not durable knowledge.
+_CLEANUP_REPORT_LINE = re.compile(
+    r"^-\s*(removi|traduzi|compactei|eliminei|mantive|deixei)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_low_value_reply(assistant_content: str) -> bool:
+    """True when the assistant content is a maintenance/report wrapper
+    with no durable value ([SILENT], "Sem novos fatos duráveis", dream or
+    cleanup reports). Conservative: anything unrecognized is kept."""
+    text = (assistant_content or "").strip()
+    if not text:
+        return False
+    if any(p.search(text) for p in _LOW_VALUE_ASSISTANT_PATTERNS):
+        return True
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if lines and all(_CLEANUP_REPORT_LINE.match(ln) for ln in lines):
+        return True
+    return False
+
+
+_DEDUP_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_turn_text(user_content: str, assistant_content: str) -> str:
+    """Canonical form for cross-session dedup: casefold + collapse all
+    whitespace. Materially different turns (different words) never
+    collide; formatting/case variants of the same content do."""
+    combined = f"{user_content}\n{assistant_content}"
+    return _DEDUP_WS_RE.sub(" ", combined).casefold().strip()
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +341,13 @@ class MemPalaceMemoryProvider(MemoryProvider):
         self._sync_enabled = bool(self._config.get("sync_enabled", True))
         self._sync_min = int(self._config.get("sync_min_chars", 80))
         self._sync_max = int(self._config.get("sync_max_chars", 12000))
+        self._sync_skip_platforms = self._config_str_list(
+            "sync_skip_platforms", lowercase=True)
+        self._sync_skip_session_prefixes = self._config_str_list(
+            "sync_skip_session_prefixes")
+        self._sync_skip_low_value = bool(
+            self._config.get("sync_skip_low_value", True))
+        self._sync_dedup = bool(self._config.get("sync_dedup_enabled", True))
         try:
             self._mine_lock_timeout = max(
                 0.0, float(self._config.get("mine_lock_timeout_seconds", 5))
@@ -295,6 +390,19 @@ class MemPalaceMemoryProvider(MemoryProvider):
         # Cross-process lock file path, resolved in initialize().
         self._mine_lock_path = ""
         self._threads: List[threading.Thread] = []
+
+    def _config_str_list(self, key: str, *, lowercase: bool = False) -> tuple:
+        """Read a list-of-strings config key, falling back to the default
+        on any malformed value. Never raises."""
+        raw = self._config.get(key, _DEFAULTS.get(key, []))
+        if not isinstance(raw, (list, tuple)):
+            raw = _DEFAULTS.get(key, [])
+        out = []
+        for item in raw:
+            text = str(item).strip()
+            if text:
+                out.append(text.lower() if lowercase else text)
+        return tuple(out)
 
     @property
     def name(self) -> str:
@@ -622,11 +730,53 @@ class MemPalaceMemoryProvider(MemoryProvider):
 
     # -- Sync ----------------------------------------------------------------
 
+    def _dedup_index_dir(self) -> Path:
+        return Path(self._corpus, "turns", ".dedup-index")
+
+    def _normalized_turn_digest(self, user_content: str, assistant_content: str) -> str:
+        """Content-only digest over the normalized turn text. Independent
+        of session id so exact/near-exact repeats across sessions collide."""
+        normalized = _normalize_turn_text(
+            user_content[: self._sync_max], assistant_content[: self._sync_max]
+        )
+        return hashlib.sha256(normalized.encode("utf-8", "replace")).hexdigest()[:24]
+
+    def _claim_content_marker(self, digest: str) -> Optional[bool]:
+        """Atomically claim the dedup marker for ``digest``.
+
+        Returns True when this process claimed it first (proceed to write),
+        False when it already exists (duplicate content — skip), or None
+        when the index is unusable (fail open: file the turn). ``open(x)``
+        is atomic on POSIX, so two concurrent processes can never both
+        claim the same marker; no directory scan is involved."""
+        try:
+            index_dir = self._dedup_index_dir()
+            index_dir.mkdir(parents=True, exist_ok=True)
+            with open(index_dir / digest, "x", encoding="utf-8") as fh:
+                fh.write(
+                    f"{datetime.now(timezone.utc).isoformat()} "
+                    f"{self._session_id or 'nosession'}\n"
+                )
+            return True
+        except FileExistsError:
+            return False
+        except Exception as e:
+            logger.debug("MemPalace dedup index unavailable: %s", e)
+            return None
+
+    def _release_content_marker(self, digest: str) -> None:
+        """Best-effort removal of a claimed marker (transcript write failed,
+        so the content is not actually filed and must stay claimable)."""
+        try:
+            (self._dedup_index_dir() / digest).unlink()
+        except Exception:
+            pass
+
     def _write_transcript(self, user_content: str, assistant_content: str) -> Optional[Path]:
         """Write a turn transcript into <corpus>/turns/. Returns the path,
-        or None if skipped (too short, looks like a secret, or write error).
-        Filename is deterministic per (session, content) so re-syncing the
-        same turn does not create duplicates."""
+        or None if skipped (too short, looks like a secret, duplicate
+        content, or write error). Dedup is content-keyed across sessions
+        via an O(1) atomic marker index — never a corpus scan."""
         combined = f"{user_content}\n{assistant_content}".strip()
         if len(combined) < self._sync_min:
             return None
@@ -638,20 +788,20 @@ class MemPalaceMemoryProvider(MemoryProvider):
         a = assistant_content[: self._sync_max]
 
         sid = self._session_id or "nosession"
-        digest = hashlib.sha256(
-            f"{sid}\x00{u}\x00{a}".encode("utf-8", "replace")
-        ).hexdigest()[:12]
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        fname = f"turn-{ts}-{sid[:8]}-{digest}.md"
-        dest = Path(self._corpus, "turns", fname)
+        digest = self._normalized_turn_digest(user_content, assistant_content)
 
-        # Idempotent-ish: same session+content already filed → skip.
-        try:
-            existing = list(Path(self._corpus, "turns").glob(f"turn-*-{sid[:8]}-{digest}.md"))
-            if existing:
+        claimed: Optional[bool] = None
+        if self._sync_dedup:
+            claimed = self._claim_content_marker(digest)
+            if claimed is False:
+                logger.debug(
+                    "MemPalace: skipping duplicate turn content (%s)", digest
+                )
                 return None
-        except Exception:
-            pass
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        fname = f"turn-{ts}-{sid[:8]}-{digest[:12]}.md"
+        dest = Path(self._corpus, "turns", fname)
 
         iso = datetime.now(timezone.utc).isoformat()
         body = (
@@ -667,14 +817,38 @@ class MemPalaceMemoryProvider(MemoryProvider):
             return dest
         except Exception as e:
             logger.warning("MemPalace could not write transcript: %s", e)
+            if claimed is True:
+                self._release_content_marker(digest)
             return None
+
+    def _is_background_session(self, session_id: str, user_content: str) -> bool:
+        """True for cron/subagent/background sessions that must never be
+        filed. agent_context alone is not trustworthy — the core cron
+        scheduler hardcodes agent_context="primary" (upstream
+        NousResearch/hermes-agent#9763) — so platform, session-id prefix
+        and the cron delivery wrapper are honored as independent signals.
+        Primary Telegram/CLI turns match none of them."""
+        if self._agent_context not in _PRIMARY_AGENT_CONTEXTS:
+            return True
+        if (self._platform or "").strip().lower() in self._sync_skip_platforms:
+            return True
+        sid = session_id or self._session_id or ""
+        if any(sid.startswith(prefix) for prefix in self._sync_skip_session_prefixes):
+            return True
+        if any(p.search(user_content) for p in _CRON_WRAPPER_MARKERS):
+            return True
+        return False
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
         if not self._sync_enabled or not self._cli:
             return
-        if self._agent_context not in ("primary", ""):
-            return  # never file subagent/cron/flush turns
-        path = self._write_transcript(user_content or "", assistant_content or "")
+        user_content = user_content or ""
+        assistant_content = assistant_content or ""
+        if self._is_background_session(session_id, user_content):
+            return  # never file cron/subagent/flush/background turns
+        if self._sync_skip_low_value and _is_low_value_reply(assistant_content):
+            return  # maintenance/report wrappers carry no durable value
+        path = self._write_transcript(user_content, assistant_content)
         if path is not None:
             self._mine_corpus_async()
 
@@ -809,6 +983,12 @@ class MemPalaceMemoryProvider(MemoryProvider):
             {"key": "timeout_seconds", "description": "CLI timeout in seconds",
              "default": str(_DEFAULTS["timeout_seconds"])},
             {"key": "sync_enabled", "description": "Auto-file conversation turns",
+             "default": "true", "choices": ["true", "false"]},
+            {"key": "sync_skip_low_value",
+             "description": "Skip low-value maintenance turns ([SILENT], 'Sem novos fatos duráveis', cleanup/dream reports)",
+             "default": "true", "choices": ["true", "false"]},
+            {"key": "sync_dedup_enabled",
+             "description": "Deduplicate turns by normalized content across sessions",
              "default": "true", "choices": ["true", "false"]},
             {"key": "mine_lock_timeout_seconds",
              "description": "Seconds to wait for the cross-process mine lock before skipping",

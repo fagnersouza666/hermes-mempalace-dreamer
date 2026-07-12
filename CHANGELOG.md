@@ -4,10 +4,41 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-07-12
+
+Memory-quality release: fixes the corpus pollution observed in production
+(dozens of near-identical `turn-...-cron_*.md` transcripts filed by
+scheduled cron runs) and reports the upstream cron-memory limitation
+honestly instead of claiming cleanup succeeded.
 
 ### Fixed
 
+- **provider: harden `sync_turn` against cron/background sessions.** Root
+  cause: the Hermes core cron scheduler hardcodes `agent_context="primary"`
+  for every session (upstream NousResearch/hermes-agent#9763), so the old
+  `agent_context`-only guard filed every cron run — including the full
+  skill text embedded in each cron prompt — into the corpus, day after
+  day. The bundled provider now also honors the reported platform
+  (`sync_skip_platforms`, default `[cron]`), the session-id prefix
+  (`sync_skip_session_prefixes`, default `[cron_]`), and the cron delivery
+  wrapper embedded in the user content as independent signals. Primary
+  Telegram/CLI ingestion is unaffected.
+- **provider: drop low-value maintenance/report turns.** `[SILENT]`,
+  "Sem novos fatos duráveis", "Sem limpeza segura na memória curta",
+  "no new durable facts", the deterministic `# MemPalace Dream Report`
+  rendering, dreaming-report bullet wrappers (`- memórias salvas: ...`)
+  and cleanup-report bullet wrappers (`- removi/traduzi/compactei/...`)
+  are no longer filed (configurable via `sync_skip_low_value`). Material
+  turns that merely mention these markers are preserved.
+- **provider: cross-session normalized-content dedup.** Turns are now
+  deduplicated by a digest of the normalized content (casefold +
+  whitespace collapse), not per `(session, content)`, so the same content
+  under a different session id is filed exactly once. The dedup index is
+  an O(1) atomic marker directory (`<corpus>/turns/.dedup-index/`, claimed
+  with `open(..., 'x')`), safe under concurrent processes, with no corpus
+  scan per turn. A failed transcript write releases its marker so content
+  is never permanently lost. Materially different turns are always
+  preserved. Configurable via `sync_dedup_enabled`.
 - honor the active Hermes home in live runtime commands and audits. Runtime
   validation against a fresh isolated profile exposed that `verify-runtime`,
   `doctor`, and `repair-plan` could drift back to `~/.hermes` if callers
@@ -22,6 +53,25 @@ follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 
 ### Added
 
+- **`corpus-cleanup` command** to migrate an already-polluted corpus:
+  read-only dry-run plan by default (classifies `background-session`,
+  `low-value` and `duplicate-content` turn files, always keeping the
+  earliest copy and anything unparseable); `--apply` MOVES the planned
+  files into a backup directory (`--backup-dir`, default
+  `<corpus>/cleanup-backup-<UTC stamp>/`) — it never deletes — and
+  rebuilds the provider-compatible dedup index from the kept files. The
+  palace is never read or written; re-mining after review is a deliberate
+  manual step.
+- **doctor/repair-plan/setup: detect the unsupported built-in
+  short-memory cleanup cron (#9763).** `doctor` reads
+  `$HERMES_HOME/cron/jobs.json` (read-only) and flags enabled agent jobs
+  whose prompt targets built-in short-memory cleanup (memória curta /
+  MEMORY.md / USER.md / `memory(action=...)`): Hermes cron sessions run
+  with `skip_memory=True`, so the memory tool is unavailable and such a
+  job reports "ok" without cleaning anything. The finding flips `doctor`
+  to `ok=false`, `repair-plan` proposes a manual, report-only remediation
+  (pause/remove the job by id, run the cleanup interactively), and the
+  setup plan documents the limitation. Hermes core is never patched.
 - document the post-`1.0.1` production hardening that is already present on
   `main`: explicit provider bootstrap during setup, deterministic install
   fallback (`auto|uv|pipx|pip-user`), fresh/fake Hermes-home smoke coverage,
