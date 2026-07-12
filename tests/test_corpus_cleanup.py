@@ -216,6 +216,131 @@ def test_apply_result_is_json_serializable(corpus, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Backup placement vs the recursive corpus miner (production regression)
+# ---------------------------------------------------------------------------
+#
+# ``mempalace mine <corpus>`` scans the corpus tree RECURSIVELY. The 1.1.0
+# default backup (``<corpus>/cleanup-backup-<stamp>/``) therefore stayed
+# visible to the miner and every "removed" turn was re-ingested on the next
+# mine. These tests simulate the miner with ``corpus.rglob("turn-*.md")``.
+
+
+def _recursive_miner_view(corpus):
+    """The set of turn files a recursive corpus mine would ingest."""
+    return {p.name for p in Path(corpus).rglob("turn-*.md")}
+
+
+def test_default_backup_dir_is_a_sibling_outside_the_corpus(corpus):
+    plan = build_corpus_cleanup_plan(corpus)
+    result = apply_corpus_cleanup(plan, apply=True)
+
+    backup = Path(result["backup_dir"])
+    assert result["applied"] is True
+    assert backup.parent == Path(corpus).parent
+    assert backup.name.startswith(f"{Path(corpus).name}-cleanup-backup-")
+    assert Path(corpus).resolve() not in backup.resolve().parents
+    assert len(list((backup / "turns").glob("turn-*.md"))) == 3
+
+
+def test_recursive_scan_after_default_apply_sees_only_kept_files(corpus):
+    plan = build_corpus_cleanup_plan(corpus)
+    result = apply_corpus_cleanup(plan, apply=True)
+
+    assert result["applied"] is True
+    assert result["errors"] == []
+    # Regression: with the old in-corpus default, the 3 moved files stayed
+    # visible to the recursive miner and were re-ingested after re-mining.
+    assert _recursive_miner_view(corpus) == {
+        "turn-20260516T010000-20260516-aaaaaaaaaaaa.md",
+        "turn-20260518T010000-20260518-cccccccccccc.md",
+    }
+
+
+def test_apply_refuses_backup_dir_inside_the_corpus(corpus):
+    plan = build_corpus_cleanup_plan(corpus)
+    inside = Path(corpus, "cleanup-backup-manual")
+    result = apply_corpus_cleanup(plan, apply=True, backup_dir=inside)
+
+    assert result["applied"] is False
+    assert result["moved"] == []
+    assert any("inside the corpus" in e for e in result["errors"])
+    assert not inside.exists()
+    # Nothing moved: the corpus is untouched.
+    assert len(list(Path(corpus, "turns").glob("turn-*.md"))) == 5
+
+
+def _write_legacy_in_corpus_backup(corpus):
+    """Simulate the 1.1.0 bug: a cleanup backup left inside the corpus."""
+    legacy = Path(corpus, "cleanup-backup-20260601T000000Z")
+    _write_turn(
+        legacy, "turn-20260601T000000-cron_old-999999999999.md",
+        session_id="cron_86ebf7425e3c_20260601_000000", platform="cron",
+        user="rotina diária de dreaming", assistant="- memórias salvas: nenhuma.",
+    )
+    return legacy
+
+
+def test_plan_detects_existing_in_corpus_backup(corpus):
+    legacy = _write_legacy_in_corpus_backup(corpus)
+    plan = build_corpus_cleanup_plan(corpus)
+
+    assert plan["existing_backups"] == [
+        {"path": str(legacy), "turn_files": 1}
+    ]
+    assert any("re-ingests" in w for w in plan["warnings"])
+    # The backup contents are not classified as regular corpus turns.
+    assert plan["scanned"] == 5
+    # Detection is read-only: the legacy backup stays untouched.
+    assert legacy.is_dir()
+
+
+def test_dry_run_reports_existing_backups_without_touching(corpus):
+    legacy = _write_legacy_in_corpus_backup(corpus)
+    plan = build_corpus_cleanup_plan(corpus)
+    result = apply_corpus_cleanup(plan)
+
+    assert result["applied"] is False
+    assert result["existing_backups"] == [
+        {"path": str(legacy), "turn_files": 1}
+    ]
+    assert result["relocated_backups"] == []
+    assert legacy.is_dir()
+
+
+def test_apply_relocates_existing_in_corpus_backups(corpus):
+    legacy = _write_legacy_in_corpus_backup(corpus)
+    plan = build_corpus_cleanup_plan(corpus)
+    result = apply_corpus_cleanup(plan, apply=True)
+
+    assert result["applied"] is True
+    assert result["errors"] == []
+    assert len(result["relocated_backups"]) == 1
+    relocated = result["relocated_backups"][0]
+    assert relocated["from"] == str(legacy)
+    assert relocated["turn_files"] == 1
+
+    # Moved (never deleted): the backup lives on outside the corpus.
+    assert not legacy.exists()
+    dst = Path(relocated["to"])
+    assert dst.is_dir()
+    assert Path(corpus).resolve() not in dst.resolve().parents
+    assert len(list(dst.rglob("turn-*.md"))) == 1
+
+    # The recursive miner no longer sees the legacy backup either.
+    assert _recursive_miner_view(corpus) == {
+        "turn-20260516T010000-20260516-aaaaaaaaaaaa.md",
+        "turn-20260518T010000-20260518-cccccccccccc.md",
+    }
+
+
+def test_apply_result_with_relocation_is_json_serializable(corpus):
+    _write_legacy_in_corpus_backup(corpus)
+    plan = build_corpus_cleanup_plan(corpus)
+    result = apply_corpus_cleanup(plan, apply=True)
+    json.dumps(result)
+
+
+# ---------------------------------------------------------------------------
 # CLI subcommand
 # ---------------------------------------------------------------------------
 
@@ -264,3 +389,19 @@ def test_cli_corpus_cleanup_apply_moves_to_backup(corpus, tmp_path, capsys):
     assert out["result"]["applied"] is True
     assert len(list(Path(corpus, "turns").glob("turn-*.md"))) == 2
     assert len(list(Path(backup, "turns").glob("turn-*.md"))) == 3
+
+
+def test_cli_corpus_cleanup_default_backup_lands_outside_corpus(corpus, capsys):
+    module, args = _run_cli([
+        "corpus-cleanup", "--corpus-path", str(corpus), "--apply",
+    ])
+    module._handle_cli(args)
+    out = json.loads(capsys.readouterr().out)
+    assert out["result"]["applied"] is True
+    backup = Path(out["result"]["backup_dir"])
+    assert Path(corpus).resolve() not in backup.resolve().parents
+    assert backup.resolve() != Path(corpus).resolve()
+    assert _recursive_miner_view(corpus) == {
+        "turn-20260516T010000-20260516-aaaaaaaaaaaa.md",
+        "turn-20260518T010000-20260518-cccccccccccc.md",
+    }

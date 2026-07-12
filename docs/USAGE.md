@@ -359,8 +359,18 @@ Safety model, by design:
 - **Dry-run by default**: without `--apply` it prints the plan and moves
   nothing (`result.applied: false`).
 - **Backup-aware, never deletes**: `--apply` MOVES the planned files into
-  `<backup-dir>/turns/` (default `<corpus>/cleanup-backup-<UTC stamp>/`).
-  Restoring is a plain move back.
+  `<backup-dir>/turns/` (default
+  `<parent of corpus>/<corpus name>-cleanup-backup-<UTC stamp>/`, a
+  **sibling** of the corpus). Restoring is a plain move back.
+- **Backup always outside the corpus tree**: `mempalace mine <corpus>`
+  scans the corpus recursively, so an in-corpus backup would get every
+  "removed" turn re-ingested on the next mine (the 1.1.0 default had
+  exactly this bug). An explicit `--backup-dir` inside the corpus is
+  refused (`applied: false` + `errors`).
+- **Legacy in-corpus backups are detected and relocated**: backups that a
+  1.1.0 cleanup left at `<corpus>/cleanup-backup-*/` are reported in the
+  plan (`existing_backups` + a warning) and, on `--apply`, MOVED to
+  `<backup-dir>/relocated-backups/` — outside the corpus, never deleted.
 - **Rebuilds the dedup index** from the kept files
   (`<corpus>/turns/.dedup-index/`) so the provider's cross-session dedup
   starts from the cleaned corpus.

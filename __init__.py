@@ -194,7 +194,7 @@ def _provider_install_argv(method: str) -> list[str]:
     raise ValueError(f"unknown provider install method: {method!r}")
 
 PLUGIN_NAME = "mempalace-dreaming"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.1.1"
 PLUGIN_STATUS = "production-ready bootstrap v1.0"
 
 
@@ -937,8 +937,10 @@ def _setup_cli_parser(parser) -> None:
         "--backup-dir",
         default=None,
         help=(
-            "Backup directory for moved files "
-            "(default: <corpus>/cleanup-backup-<UTC stamp>/)"
+            "Backup directory for moved files, MUST be outside the corpus "
+            "tree (a recursive mine would re-ingest an in-corpus backup; "
+            "default: <parent of corpus>/<corpus name>-cleanup-backup-"
+            "<UTC stamp>/, a sibling of the corpus)"
         ),
     )
     corpus_cleanup.set_defaults(func=_handle_cli)

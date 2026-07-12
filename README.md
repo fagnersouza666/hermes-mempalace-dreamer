@@ -175,7 +175,11 @@ time (see `CHANGELOG.md` for the full rationale):
   per turn. Materially different turns are always preserved.
 - **`corpus-cleanup`** migrates an already-polluted corpus: dry-run plan
   by default; `--apply` moves files to a backup (never deletes) and
-  rebuilds the dedup index. The palace is never touched.
+  rebuilds the dedup index. The palace is never touched. Since v1.1.1 the
+  backup defaults to a **sibling of the corpus** (never inside it — the
+  recursive miner would re-ingest an in-corpus backup), an in-corpus
+  `--backup-dir` is refused, and legacy in-corpus `cleanup-backup-*`
+  directories are detected and relocated outside on `--apply`.
 
 **Known upstream limitation (#9763):** a cron job that tries to clean the
 built-in short memory (MEMORY.md/USER.md via `memory(action=...)`) cannot

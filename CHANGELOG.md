@@ -4,6 +4,38 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-07-12
+
+Critical fix for a production regression introduced by the 1.1.0
+`corpus-cleanup` command: its default backup directory lived INSIDE the
+corpus (`<corpus>/cleanup-backup-<UTC stamp>/`), and `mempalace mine
+<corpus>` scans the corpus tree recursively — so after the documented
+re-mine, every "removed" turn file was immediately re-ingested from the
+backup (observed live: 54 cron files back in the palace, 2238 drawers).
+
+### Fixed
+
+- **corpus-cleanup: default backup moved outside the mined corpus tree.**
+  The default is now a *sibling* of the corpus —
+  `<parent of corpus>/<corpus name>-cleanup-backup-<UTC stamp>/` — which a
+  recursive `mempalace mine <corpus>` can never see. Rollback stays a
+  plain move back; `--backup-dir` keeps working for any location outside
+  the corpus.
+- **corpus-cleanup: an explicit `--backup-dir` inside the corpus is
+  refused.** Apply returns `applied: false` with a clear `errors` entry
+  instead of silently recreating the re-ingestion bug. Nothing is moved
+  in that case.
+- **corpus-cleanup: legacy in-corpus backups are detected and relocated.**
+  The dry-run plan lists `cleanup-backup-*` directories found anywhere
+  under the corpus in `existing_backups` (path + turn-file count) with an
+  explicit warning that a recursive mine re-ingests them; `--apply` MOVES
+  each one (never deletes) to `<backup-dir>/relocated-backups/`, outside
+  the corpus. Failures are collected per directory in `errors`.
+- Regression test suite simulating the recursive miner
+  (`corpus.rglob("turn-*.md")`): after a default apply — including with a
+  legacy in-corpus backup present — the recursive scan sees exactly the
+  kept files and nothing from any backup.
+
 ## [1.1.0] - 2026-07-12
 
 Memory-quality release: fixes the corpus pollution observed in production
