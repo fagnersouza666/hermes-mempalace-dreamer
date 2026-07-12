@@ -235,7 +235,7 @@ def test_doctor_success_path_ok_true(tmp_path):
     assert report["ok"] is True
     assert report["warnings"] == []
     assert report["plugin"] == "mempalace-dreaming"
-    assert report["version"] == "1.1.1"
+    assert report["version"] == "1.1.2"
     assert "checks" in report
     assert "recommendations" in report
     # JSON-serializable

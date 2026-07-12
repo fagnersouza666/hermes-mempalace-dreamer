@@ -399,7 +399,7 @@ def test_cli_dry_run_with_flags_stays_side_effect_free(capsys, tmp_path):
 def test_plugin_status_reports_production_bootstrap_v1():
     module = load_plugin()
     status = module._build_status()
-    assert status["version"] == "1.1.1"
+    assert status["version"] == "1.1.2"
     assert "production" in status["status"].lower()
     assert status["safety"]["cron_creation_explicit"] is True
     assert status["safety"]["verify_after_apply_explicit"] is True
