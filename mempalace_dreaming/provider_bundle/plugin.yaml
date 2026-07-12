@@ -1,5 +1,5 @@
 name: mempalace
-version: 1.0.0
+version: 1.1.0
 description: "MemPalace local long-term memory — searches past conversations and notes via the mempalace CLI (no API key, no MCP). Auto-files turns and mirrors durable memory into a local palace."
 hooks:
   - on_memory_write
@@ -34,6 +34,18 @@ config:
   sync_max_chars:
     description: "Max chars per user/assistant section written to a transcript"
     default: 12000
+  sync_skip_platforms:
+    description: "Platforms whose turns are never filed (cron scheduler mis-reports agent_context=primary — upstream hermes-agent#9763)"
+    default: [cron]
+  sync_skip_session_prefixes:
+    description: "Session-id prefixes whose turns are never filed"
+    default: [cron_]
+  sync_skip_low_value:
+    description: "Skip low-value maintenance turns ([SILENT], 'Sem novos fatos duráveis', cleanup/dream report wrappers)"
+    default: true
+  sync_dedup_enabled:
+    description: "Deduplicate turns by normalized content across sessions (atomic marker index, no corpus scan)"
+    default: true
   auto_prefetch_enabled:
     description: "Auto-recall from MemPalace before each turn"
     default: true

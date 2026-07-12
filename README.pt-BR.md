@@ -39,8 +39,9 @@ Partes já implementadas:
   - `hermes mempalace-dreaming schedule-plan` (JSON somente relatório; nunca cria cron)
   - `hermes mempalace-dreaming lean-check` (JSON somente relatório; classifica material candidato local, sem gravações)
   - `hermes mempalace-dreaming integration-report` (JSON somente relatório; integração REM-style com contradições, candidatos a supersede e clusters leves, sem gravações nem deleções)
-  - `hermes mempalace-dreaming doctor` (auditoria operacional somente leitura: presença do plugin, provider de memória, coerência de configuração, estado do cron, detecção de duplicatas e desvio de timezone; nunca muta nada)
+  - `hermes mempalace-dreaming doctor` (auditoria operacional somente leitura: presença do plugin, provider de memória, coerência de configuração, estado do cron, detecção de duplicatas e desvio de timezone, e detecção do cron de limpeza de memória curta built-in não suportado — upstream NousResearch/hermes-agent#9763; nunca muta nada)
   - `hermes mempalace-dreaming repair-plan` (somente relatório: transforma os achados do doctor em um plano de reparo explícito e ordenado por prioridade, com prévias de comando; nunca aplica nenhuma correção)
+  - `hermes mempalace-dreaming corpus-cleanup` (plano dry-run dos arquivos de turno duplicados/de cron/de baixo valor em um corpus existente; `--apply` MOVE os arquivos para um diretório de backup — nunca apaga — e reconstrói o índice de dedup; o palace nunca é tocado)
 - Fornece um planejador de setup em modo dry-run:
   - `build_setup_plan(...)`
 - Fornece uma camada de aplicação explícita:
@@ -155,6 +156,39 @@ git clone https://github.com/fagnersouza666/hermes-mempalace-dreamer.git
 cd hermes-mempalace-dreamer
 python3 -m pytest tests -q
 ```
+
+## Guardas de qualidade de memória (v1.1.0)
+
+O provider `mempalace` empacotado agora protege a qualidade do corpus na
+ingestão (racional completo no `CHANGELOG.md`):
+
+- **Sessões de cron/background nunca são arquivadas.** O scheduler de cron
+  do core do Hermes hardcoda `agent_context="primary"` para toda sessão
+  (upstream NousResearch/hermes-agent#9763), então o provider também honra
+  a plataforma reportada (`sync_skip_platforms`, padrão `[cron]`), o
+  prefixo do session id (`sync_skip_session_prefixes`, padrão `[cron_]`) e
+  o wrapper de entrega de cron no conteúdo da mensagem. A ingestão
+  primária de Telegram/CLI não é afetada.
+- **Turnos de manutenção de baixo valor são descartados**
+  (`sync_skip_low_value`): `[SILENT]`, "Sem novos fatos duráveis", "Sem
+  limpeza segura na memória curta", wrappers de relatório de
+  dreaming/limpeza.
+- **Dedup por conteúdo normalizado entre sessões** (`sync_dedup_enabled`):
+  o mesmo conteúdo sob outro session id é arquivado uma vez, via índice de
+  marcadores atômico O(1), seguro sob processos concorrentes — sem varrer
+  o corpus a cada turno. Turnos materialmente diferentes são sempre
+  preservados.
+- **`corpus-cleanup`** migra um corpus já poluído: plano dry-run por
+  padrão; `--apply` move arquivos para backup (nunca apaga) e reconstrói
+  o índice de dedup. O palace nunca é tocado.
+
+**Limitação upstream conhecida (#9763):** um cron job que tente limpar a
+memória curta built-in (MEMORY.md/USER.md via `memory(action=...)`) não
+funciona — sessões de cron do Hermes rodam com `skip_memory=True`, então a
+ferramenta de memória fica indisponível e o job reporta "ok" sem limpar
+nada. O `doctor` detecta esses jobs e reporta com honestidade; execute
+essa limpeza em sessão interativa. Este plugin nunca aplica patch no core
+do Hermes.
 
 ## Política de segurança atual
 

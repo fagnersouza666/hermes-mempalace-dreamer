@@ -219,6 +219,20 @@ carries `ok`, `warnings`, `recommendations`, and `checks`.
    - `daily_job_present`: whether `mempalace-dreaming-daily` exists;
    - `dreaming_jobs`: list of parsed jobs that look dreaming-related (matches names containing "dream", "sonho", or "mempalace-dreaming");
    - `duplicate_dreaming_jobs`: true if more than one **daily/legacy** dreaming-like job is found (including legacy names like `Sonhos diários MemPalace`). The distinct weekly lean-check job `mempalace-dreaming-weekly-lean-check` is excluded from this duplicate detector on purpose.
+5. **Unsupported built-in short-memory cleanup cron (upstream #9763)** —
+   reads `$HERMES_HOME/cron/jobs.json` (read-only; `hermes cron list` does
+   not expose prompts) and flags enabled agent jobs whose prompt targets
+   built-in short-memory cleanup (memória curta / MEMORY.md / USER.md /
+   `memory(action=...)` plus a cleanup intent). Hermes core runs cron
+   sessions with `skip_memory=True`, so the memory tool is unavailable
+   there: such a job **reports "ok" while cleaning nothing**
+   (NousResearch/hermes-agent#9763). Doctor reports
+   `short_memory_cleanup_jobs` / `short_memory_cleanup_unsupported` under
+   `checks.cron`, adds an explicit warning naming #9763, and recommends
+   pausing/removing the job and running the cleanup interactively. Script
+   (`no_agent`) jobs and disabled jobs are never flagged; a missing
+   `jobs.json` is silent; a malformed one degrades into a warning. Hermes
+   core is never patched by this plugin.
 
 #### Optional schedule comparison
 
@@ -247,7 +261,8 @@ schedule-mismatch claim. Presence and duplicate checks still run.
 
 `ok` is `true` only if all checks pass: CLI callable, memory status ok, provider
 is mempalace, skill/engine/setup present, config coherent, daily job present,
-no duplicate jobs, and `schedule_mismatch` is not `true`.
+no duplicate jobs, no unsupported short-memory cleanup cron (#9763), and
+`schedule_mismatch` is not `true`.
 
 Each failing condition appends a specific warning; recommendations give the
 concrete next action (e.g. `hermes config set memory.provider mempalace`, or
@@ -317,6 +332,42 @@ backend; duplicate detection only happens when a `search_fn` is injected into
 the pure helper. Secret-like material is counted and warned about but its
 text is **redacted** in the report, never echoed back. Missing input,
 unreadable files, or invalid JSON become warnings, not a crash.
+
+### `corpus-cleanup` — dry-run by default, backup-aware apply
+
+```bash
+hermes mempalace-dreaming corpus-cleanup --corpus-path ~/.hermes/mempalace/hermes-corpus
+hermes mempalace-dreaming corpus-cleanup --corpus-path <corpus> --apply
+hermes mempalace-dreaming corpus-cleanup --corpus-path <corpus> --apply --backup-dir /path/to/backup
+```
+
+Migrates an **existing** corpus that was polluted before the 1.1.0
+ingestion guards (cron-session transcripts, low-value maintenance
+reports, exact content repeats across sessions). It scans
+`<corpus>/turns/turn-*.md` and classifies each file:
+
+- `background-session` — `platform: cron` header, `cron_*` session id, or
+  the cron delivery wrapper embedded in the user content;
+- `low-value` — `[SILENT]`, "Sem novos fatos duráveis", "Sem limpeza
+  segura na memória curta", dream/cleanup report wrappers;
+- `duplicate-content` — normalized content (casefold + whitespace
+  collapse) already seen in an earlier kept file. The **earliest copy is
+  always kept**; materially different turns are never grouped.
+
+Safety model, by design:
+
+- **Dry-run by default**: without `--apply` it prints the plan and moves
+  nothing (`result.applied: false`).
+- **Backup-aware, never deletes**: `--apply` MOVES the planned files into
+  `<backup-dir>/turns/` (default `<corpus>/cleanup-backup-<UTC stamp>/`).
+  Restoring is a plain move back.
+- **Rebuilds the dedup index** from the kept files
+  (`<corpus>/turns/.dedup-index/`) so the provider's cross-session dedup
+  starts from the cleaned corpus.
+- **Never touches the palace.** After an applied cleanup, review the
+  result and re-mine the corpus yourself so the palace reflects the
+  cleaned turns; that step is intentionally manual.
+- Unparseable files are conservatively kept and reported in `warnings`.
 
 ### `integration-report` — report-only
 

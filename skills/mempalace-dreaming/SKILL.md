@@ -1,7 +1,7 @@
 ---
 name: mempalace-dreaming
 description: Use when consolidating Hermes memory, running agent dreaming, adapting Hermes memory-skills ideas, auditing memory quality, or scheduling MemPalace-first memory maintenance. Uses MemPalace as the primary semantic store and keeps built-in MEMORY.md/USER.md compact.
-version: 1.0.1
+version: 1.1.0
 author: Hermes Agent
 license: MIT
 metadata:
