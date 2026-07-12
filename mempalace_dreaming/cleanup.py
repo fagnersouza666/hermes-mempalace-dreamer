@@ -17,6 +17,15 @@ The palace itself (the mined HNSW store) is never read or written here.
 After an applied cleanup the operator should re-mine the corpus so the
 palace reflects the cleaned turns; that step is intentionally manual.
 
+The backup directory must live OUTSIDE the corpus tree: ``mempalace mine
+<corpus>`` scans the corpus recursively, so an in-corpus backup gets every
+"removed" turn re-ingested on the very next mine. The default backup is a
+*sibling* of the corpus (``<parent>/<corpus name>-cleanup-backup-<UTC
+stamp>/``), apply refuses an explicit ``backup_dir`` inside the corpus, and
+backups from older plugin versions that still sit inside the corpus
+(``cleanup-backup-*``) are detected in the plan and relocated outside by
+apply.
+
 The classification patterns mirror the ingestion-side guards in
 ``provider_bundle/provider_init.py``. They are duplicated on purpose: the
 provider bundle is copied standalone into ``$HERMES_HOME/plugins/`` and
@@ -33,6 +42,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 MoveFn = Callable[[str, str], object]
+
+#: Directory-name prefix of every cleanup backup ever written by this
+#: module. Also used to *find* legacy backups that older versions placed
+#: inside the corpus.
+BACKUP_DIR_PREFIX = "cleanup-backup-"
 
 #: Platforms recorded in a transcript header that mark a background session.
 _BACKGROUND_PLATFORMS = frozenset({"cron"})
@@ -130,6 +144,55 @@ def _classify(parsed: dict) -> str | None:
     return None
 
 
+def _default_backup_dir(corpus: Path, stamp: str) -> Path:
+    """Default backup location: a *sibling* of the corpus, never inside it.
+
+    ``mempalace mine <corpus>`` scans the corpus tree recursively, so any
+    backup under the corpus root would be re-ingested on the next mine —
+    exactly the bug this default prevents.
+    """
+    return corpus.parent / f"{corpus.name}-{BACKUP_DIR_PREFIX}{stamp}"
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """True when ``path`` is ``root`` or lives anywhere under it."""
+    try:
+        path = path.expanduser().resolve()
+        root = root.expanduser().resolve()
+    except OSError:
+        return False
+    return path == root or root in path.parents
+
+
+def find_in_corpus_backups(corpus_path: str | Path) -> list[dict[str, Any]]:
+    """Find legacy ``cleanup-backup-*`` directories inside the corpus tree.
+
+    Older plugin versions defaulted the backup to
+    ``<corpus>/cleanup-backup-<stamp>/``; a recursive corpus mine re-ingests
+    everything in there. Returns one JSON-serializable entry per backup
+    directory (``path`` + ``turn_files`` count), sorted by path. Read-only
+    and tolerant: an unreadable corpus yields ``[]``.
+    """
+    corpus = Path(corpus_path).expanduser()
+    found: list[dict[str, Any]] = []
+    try:
+        candidates = sorted(corpus.rglob(f"{BACKUP_DIR_PREFIX}*"))
+    except OSError:
+        return found
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        # Ignore backups nested inside an already-found backup directory.
+        if any(_is_within(candidate, Path(e["path"])) for e in found):
+            continue
+        try:
+            turn_files = sum(1 for _ in candidate.rglob("turn-*.md"))
+        except OSError:
+            turn_files = 0
+        found.append({"path": str(candidate), "turn_files": turn_files})
+    return found
+
+
 def build_corpus_cleanup_plan(corpus_path: str | Path) -> dict[str, Any]:
     """Read-only cleanup plan for ``<corpus>/turns/``.
 
@@ -142,8 +205,12 @@ def build_corpus_cleanup_plan(corpus_path: str | Path) -> dict[str, Any]:
     * ``duplicate-content`` — normalized content already seen in an earlier
       *kept* file (the earliest copy is always kept).
 
-    Unparseable files are kept and reported in ``warnings``. Nothing is
-    mutated; the result is JSON-serializable and deterministic.
+    Legacy in-corpus ``cleanup-backup-*`` directories (written by older
+    plugin versions) are reported under ``existing_backups`` with a warning:
+    a recursive corpus mine re-ingests their contents, and apply relocates
+    them outside the corpus. Unparseable files are kept and reported in
+    ``warnings``. Nothing is mutated; the result is JSON-serializable and
+    deterministic.
     """
     corpus = Path(corpus_path).expanduser()
     turns_dir = corpus / "turns"
@@ -159,10 +226,12 @@ def build_corpus_cleanup_plan(corpus_path: str | Path) -> dict[str, Any]:
             "duplicate-content": 0,
             "kept": 0,
         },
+        "existing_backups": find_in_corpus_backups(corpus),
         "warnings": [],
         "notes": [
             "Dry-run plan: nothing was moved or deleted.",
-            "Apply moves files into a backup directory; it never deletes.",
+            "Apply moves files into a backup directory OUTSIDE the corpus "
+            "(default: a sibling of the corpus); it never deletes.",
             "The palace is never modified; re-mine the corpus after an "
             "applied cleanup so the palace reflects the cleaned turns.",
         ],
@@ -172,6 +241,14 @@ def build_corpus_cleanup_plan(corpus_path: str | Path) -> dict[str, Any]:
             "no_deletes": True,
         },
     }
+
+    for entry in plan["existing_backups"]:
+        plan["warnings"].append(
+            f"in-corpus cleanup backup at {entry['path']!r} holds "
+            f"{entry['turn_files']} turn file(s); a recursive corpus mine "
+            "re-ingests them — apply relocates this backup outside the "
+            "corpus"
+        )
 
     if not turns_dir.is_dir():
         plan["warnings"].append(
@@ -226,12 +303,20 @@ def apply_corpus_cleanup(
     """Apply (or just describe) a cleanup plan.
 
     With ``apply=False`` (default) nothing is touched and the result only
-    restates what *would* happen. With ``apply=True`` every planned file is
+    restates what *would* happen — including the legacy in-corpus backups
+    that an apply would relocate. With ``apply=True`` every planned file is
     MOVED (never deleted) into ``<backup_dir>/turns/`` — default
-    ``<corpus>/cleanup-backup-<UTC stamp>/`` — and the provider-compatible
-    dedup marker index under ``<corpus>/turns/.dedup-index/`` is rebuilt
-    from the kept files. Failures are captured in ``errors``; the palace is
-    never read or written.
+    ``<parent of corpus>/<corpus name>-cleanup-backup-<UTC stamp>/``, a
+    sibling of the corpus — and the provider-compatible dedup marker index
+    under ``<corpus>/turns/.dedup-index/`` is rebuilt from the kept files.
+
+    The backup must live outside the corpus: a recursive corpus mine would
+    re-ingest anything moved into an in-corpus backup, so an explicit
+    ``backup_dir`` inside the corpus is refused (``applied=False`` with an
+    ``errors`` entry). Legacy in-corpus ``cleanup-backup-*`` directories
+    from older versions are relocated (moved, never deleted) into
+    ``<backup_dir>/relocated-backups/``. Failures are captured in
+    ``errors``; the palace is never read or written.
     """
     corpus = Path(plan.get("corpus", ""))
     result: dict[str, Any] = {
@@ -239,6 +324,10 @@ def apply_corpus_cleanup(
         "backup_dir": None,
         "planned_moves": len(plan.get("remove", [])),
         "moved": [],
+        "existing_backups": [
+            dict(entry) for entry in plan.get("existing_backups", [])
+        ],
+        "relocated_backups": [],
         "index_markers_cleared": 0,
         "index_markers_created": 0,
         "errors": [],
@@ -246,14 +335,28 @@ def apply_corpus_cleanup(
     }
 
     if not apply:
+        if result["existing_backups"]:
+            result["notes"].append(
+                "Apply would relocate the in-corpus cleanup backup(s) "
+                "listed in 'existing_backups' to outside the corpus."
+            )
         return result
 
     if backup_dir is None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_dir = corpus / f"cleanup-backup-{stamp}"
+        backup_dir = _default_backup_dir(corpus, stamp)
     backup = Path(backup_dir).expanduser()
     backup_turns = backup / "turns"
     result["backup_dir"] = str(backup)
+
+    if _is_within(backup, corpus):
+        result["errors"].append(
+            f"refusing to apply: backup dir {str(backup)!r} is inside the "
+            f"corpus {str(corpus)!r}; a recursive corpus mine would "
+            "re-ingest every moved file — pass a --backup-dir outside the "
+            "corpus (or omit it for the sibling default)"
+        )
+        return result
 
     mover: MoveFn = move_fn or (lambda src, dst: shutil.move(src, dst))
 
@@ -264,6 +367,32 @@ def apply_corpus_cleanup(
         return result
 
     result["applied"] = True
+
+    # Relocate legacy in-corpus backups (from older plugin versions) out of
+    # the mined tree. Re-scan live instead of trusting the plan: the plan
+    # may be stale, and relocation must never miss a backup the mine can
+    # see. Moves only — nothing is deleted; rollback is a plain move back.
+    for entry in find_in_corpus_backups(corpus):
+        src = Path(entry["path"])
+        dst = backup / "relocated-backups" / src.name
+        if dst.exists():
+            result["errors"].append(
+                f"could not relocate in-corpus backup {str(src)!r}: "
+                f"destination {str(dst)!r} already exists"
+            )
+            continue
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            mover(str(src), str(dst))
+        except Exception as exc:  # noqa: BLE001 - collect, keep going
+            result["errors"].append(
+                f"could not relocate in-corpus backup {str(src)!r}: {exc}"
+            )
+            continue
+        result["relocated_backups"].append(
+            {"from": str(src), "to": str(dst),
+             "turn_files": entry.get("turn_files", 0)}
+        )
     for entry in plan.get("remove", []):
         src = Path(entry["file"])
         dst = backup_turns / src.name

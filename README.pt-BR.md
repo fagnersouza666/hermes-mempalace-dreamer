@@ -180,7 +180,11 @@ ingestão (racional completo no `CHANGELOG.md`):
   preservados.
 - **`corpus-cleanup`** migra um corpus já poluído: plano dry-run por
   padrão; `--apply` move arquivos para backup (nunca apaga) e reconstrói
-  o índice de dedup. O palace nunca é tocado.
+  o índice de dedup. O palace nunca é tocado. Desde a v1.1.1 o backup
+  padrão é um **irmão do corpus** (nunca dentro dele — o miner recursivo
+  re-ingeriria um backup interno), um `--backup-dir` dentro do corpus é
+  recusado, e backups legados `cleanup-backup-*` dentro do corpus são
+  detectados e realocados para fora no `--apply`.
 
 **Limitação upstream conhecida (#9763):** um cron job que tente limpar a
 memória curta built-in (MEMORY.md/USER.md via `memory(action=...)`) não
