@@ -74,6 +74,38 @@ BENIGN_JOB = {
     "enabled": True,
 }
 
+# Real-shaped active dreaming job (regression for the v1.1.1 doctor false
+# positive): the prompt forbids touching MEMORY.md/USER.md ("Não altere ...")
+# and uses "compacto" as an adjective on another line. Neither may count as
+# scheduled built-in short-memory cleanup.
+DREAMING_JOB_REAL = {
+    "id": "86ebf7425e3c",
+    "name": "mempalace-dreaming-daily",
+    "prompt": (
+        "Execute uma rotina diária conservadora de MemPalace Dreaming, "
+        "com foco em reduzir ruído.\n"
+        "Regras obrigatórias:\n"
+        "4. Para cada candidato, use mempalace_search antes de "
+        "mempalace_remember.\n"
+        "5. Use mempalace_remember apenas para fato novo, compacto, "
+        "declarativo e não duplicado.\n"
+        "6. Não use built-in memory() para fatos comuns; MemPalace é a "
+        "memória semântica principal.\n"
+        "7. Não altere MEMORY.md/USER.md, config, skills, cron jobs ou "
+        "Obsidian durante esta rotina.\n"
+    ),
+    "no_agent": False,
+    "enabled": True,
+    "state": "scheduled",
+}
+
+# Real-shaped paused built-in cleanup job: paused jobs cannot fire, so they
+# are not an active #9763 problem and must not fail doctor.
+CLEANUP_JOB_PAUSED = dict(
+    CLEANUP_JOB, enabled=False, state="paused",
+    paused_at="2026-07-12T10:50:35-03:00",
+)
+
 
 def _write_jobs(home: Path, jobs):
     cron_dir = home / "cron"
@@ -132,6 +164,29 @@ def test_disabled_job_is_not_flagged():
     assert module._detect_short_memory_cleanup_jobs([job]) == []
 
 
+def test_paused_state_job_is_not_flagged_even_without_enabled_key():
+    module = load_plugin()
+    job = dict(CLEANUP_JOB, state="paused")
+    job.pop("enabled")
+    assert module._detect_short_memory_cleanup_jobs([job]) == []
+
+
+def test_real_dreaming_prompt_is_not_flagged():
+    """Regression (v1.1.1): the dreaming prompt mentions MEMORY.md/USER.md
+    only in a prohibition and 'compacto' as an adjective elsewhere; the
+    detector must not combine them into a false cleanup flag."""
+    module = load_plugin()
+    assert module._detect_short_memory_cleanup_jobs([DREAMING_JOB_REAL]) == []
+
+
+def test_active_cleanup_is_flagged_next_to_paused_and_dreaming_jobs():
+    module = load_plugin()
+    found = module._detect_short_memory_cleanup_jobs(
+        [DREAMING_JOB_REAL, CLEANUP_JOB_PAUSED, dict(CLEANUP_JOB, id="aa11")]
+    )
+    assert [j["id"] for j in found] == ["aa11"]
+
+
 # ---------------------------------------------------------------------------
 # Doctor integration
 # ---------------------------------------------------------------------------
@@ -169,6 +224,27 @@ def test_doctor_with_benign_jobs_stays_quiet(tmp_path):
     _write_jobs(tmp_path, [BENIGN_JOB, SCRIPT_JOB])
     report = module.build_doctor_report(str(tmp_path), run_fn=_runner(tmp_path))
     assert report["checks"]["cron"]["short_memory_cleanup_jobs"] == []
+    assert not any("#9763" in w for w in report["warnings"])
+
+
+def test_doctor_with_real_shaped_jobs_file_stays_quiet(tmp_path):
+    """Regression (v1.1.1): with the real jobs.json shape ({"jobs": [...]})
+    holding the active dreaming job and the paused built-in cleanup job,
+    doctor must not raise the #9763 flag."""
+    module = load_plugin()
+    cron_dir = tmp_path / "cron"
+    cron_dir.mkdir(parents=True)
+    (cron_dir / "jobs.json").write_text(
+        json.dumps(
+            {"jobs": [DREAMING_JOB_REAL, CLEANUP_JOB_PAUSED], "output": {}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    report = module.build_doctor_report(str(tmp_path), run_fn=_runner(tmp_path))
+    cron = report["checks"]["cron"]
+    assert cron["short_memory_cleanup_jobs"] == []
+    assert cron["short_memory_cleanup_unsupported"] is False
     assert not any("#9763" in w for w in report["warnings"])
 
 
