@@ -4,6 +4,28 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/). This project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-07-12
+
+### Fixed
+
+- **doctor: falso positivo #9763 no job legítimo `mempalace-dreaming-daily`.**
+  O detector de cron de limpeza da memória curta casava as regexes de alvo e
+  de intenção sobre o texto inteiro (nome + prompt): no prompt de dreaming,
+  "MEMORY.md/USER.md" aparece só dentro de uma *proibição* ("Não altere
+  MEMORY.md/USER.md ...") e "compacto" (adjetivo) casava `compact` em outra
+  linha — o job ativo era flagado e o doctor retornava `ok=false`. Agora o
+  alvo e a intenção de limpeza precisam co-ocorrer na **mesma linha** (nome ou
+  linha do prompt), e linhas de proibição (iniciadas por negação — "não",
+  "never", "do not") são ignoradas. Um job de limpeza built-in real continua
+  sendo flagado (o nome/prompt traz "limpeza da memória curta" /
+  `memory(action='remove')` na mesma linha).
+- **doctor: job pausado via `state: "paused"` também é tratado como inativo.**
+  Além de `enabled: false`, o detector reconhece o campo `state` do
+  `cron/jobs.json` real — um job de limpeza pausado não pode disparar, logo
+  não é um problema #9763 ativo e não derruba o doctor. Testes de regressão
+  cobrem o formato real do jobs.json (`{"jobs": [...]}`) com o job de
+  dreaming ativo e o job de limpeza pausado lado a lado.
+
 ## [1.1.1] - 2026-07-12
 
 Critical fix for a production regression introduced by the 1.1.0

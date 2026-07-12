@@ -194,7 +194,7 @@ def _provider_install_argv(method: str) -> list[str]:
     raise ValueError(f"unknown provider install method: {method!r}")
 
 PLUGIN_NAME = "mempalace-dreaming"
-PLUGIN_VERSION = "1.1.1"
+PLUGIN_VERSION = "1.1.2"
 PLUGIN_STATUS = "production-ready bootstrap v1.0"
 
 
@@ -1003,6 +1003,14 @@ _SHORT_MEMORY_CLEANUP_RE = re.compile(
     r"limp|clean|remov|compact|apag|delet|prune",
     re.IGNORECASE,
 )
+#: Lines that *forbid* touching the built-in short memory (e.g. the dreaming
+#: prompt's "Não altere MEMORY.md/USER.md ...") must not count as cleanup
+#: intent. Matches an optional list marker ("7.", "-", "*") followed by a
+#: negation in pt-BR or English.
+_NEGATED_LINE_RE = re.compile(
+    r"^\s*(?:[-*•]\s*|\d+[.)]\s*)?(?:n[ãa]o|never|don'?t|do\s+not)\b",
+    re.IGNORECASE,
+)
 
 SHORT_MEMORY_CLEANUP_LIMITATION = (
     "Hermes cron sessions run with skip_memory=True, so the built-in "
@@ -1012,15 +1020,36 @@ SHORT_MEMORY_CLEANUP_LIMITATION = (
 )
 
 
+def _line_targets_short_memory_cleanup(line: str) -> bool:
+    """True when one line carries both a built-in short-memory target and a
+    cleanup intent, and is not a prohibition.
+
+    Requiring same-line co-occurrence keeps a MemPalace dreaming prompt from
+    being misread: there, "MEMORY.md/USER.md" appears only inside a
+    prohibition line ("Não altere MEMORY.md/USER.md ...") while words like
+    "compacto" live on unrelated lines — neither may count as scheduled
+    built-in cleanup.
+    """
+    if _NEGATED_LINE_RE.match(line):
+        return False
+    return bool(
+        _SHORT_MEMORY_TARGET_RE.search(line)
+        and _SHORT_MEMORY_CLEANUP_RE.search(line)
+    )
+
+
 def _detect_short_memory_cleanup_jobs(jobs: list) -> list[dict[str, Any]]:
-    """Return enabled agent cron jobs that target built-in short-memory
+    """Return active agent cron jobs that target built-in short-memory
     cleanup (unsupported upstream, #9763).
 
     A job is flagged when it runs an agent (not a ``no_agent`` script), is
-    enabled, and its prompt+name mention both a built-in short-memory
-    target (memória curta / MEMORY.md / USER.md / memory(action=...)) and a
-    cleanup intent (limpar/clean/remove/compact/...). Pure and tolerant:
-    malformed entries are skipped, never raised on.
+    active (not ``enabled: false`` nor ``state: "paused"`` — a paused job
+    cannot fire, so it is not an active problem), and its name or one prompt
+    line mentions both a built-in short-memory target (memória curta /
+    MEMORY.md / USER.md / memory(action=...)) and a cleanup intent
+    (limpar/clean/remove/compact/...) on the same line, outside a
+    prohibition. Pure and tolerant: malformed entries are skipped, never
+    raised on.
     """
     flagged: list[dict[str, Any]] = []
     for job in jobs or []:
@@ -1030,8 +1059,11 @@ def _detect_short_memory_cleanup_jobs(jobs: list) -> list[dict[str, Any]]:
             continue
         if job.get("enabled") is False:
             continue
-        text = f"{job.get('name', '')}\n{job.get('prompt', '')}"
-        if _SHORT_MEMORY_TARGET_RE.search(text) and _SHORT_MEMORY_CLEANUP_RE.search(text):
+        if str(job.get("state", "")).strip().lower() == "paused":
+            continue
+        lines = [str(job.get("name", ""))]
+        lines.extend(str(job.get("prompt", "")).splitlines())
+        if any(_line_targets_short_memory_cleanup(line) for line in lines):
             flagged.append(
                 {"id": str(job.get("id", "")), "name": str(job.get("name", ""))}
             )
